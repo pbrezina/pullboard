@@ -1,0 +1,11 @@
+import { Component } from '@angular/core';
+import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { MatTabsModule } from '@angular/material/tabs';
+
+@Component({
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, MatTabsModule],
+  selector: 'app-root',
+  styleUrl: './app.scss',
+  templateUrl: './app.html',
+})
+export class App {}

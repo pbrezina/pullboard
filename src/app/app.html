@@ -1,0 +1,31 @@
+<div class="workspace-navigation">
+  <span class="brand">
+    <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <path d="M9 7v18m0-9h7a7 7 0 0 0 7-7V7" stroke="currentColor" stroke-width="2.5" />
+      <circle cx="9" cy="6" r="3" fill="currentColor" />
+      <circle cx="9" cy="26" r="3" fill="currentColor" />
+      <circle cx="23" cy="6" r="3" fill="currentColor" />
+    </svg>
+    Pullboard
+  </span>
+  <nav mat-tab-nav-bar [tabPanel]="workspacePanel" aria-label="Workspace">
+    <a
+      mat-tab-link
+      routerLink="/"
+      routerLinkActive
+      #prs="routerLinkActive"
+      [routerLinkActiveOptions]="{ exact: true }"
+      [active]="prs.isActive"
+      >Pull requests</a
+    >
+    <a
+      mat-tab-link
+      routerLink="/synchronize-to-jira"
+      routerLinkActive
+      #jira="routerLinkActive"
+      [active]="jira.isActive"
+      >Synchronize to JIRA</a
+    >
+  </nav>
+</div>
+<mat-tab-nav-panel #workspacePanel><router-outlet /></mat-tab-nav-panel>

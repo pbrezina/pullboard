@@ -1,0 +1,528 @@
+<a class="skip-link" href="#workspace">Skip to workspace</a>
+<header class="app-header">
+  <div class="header-context" aria-label="Connected accounts and JIRA context">
+    @for (identity of identities(); track identity.providerId) {
+      <span
+        ><strong>{{ identity.label }}</strong> {{ identity.username }}
+        <span class="muted">({{ identity.host }})</span></span
+      >
+    }
+    @if (configured()) {
+      <span><strong>JIRA</strong> {{ jiraUsername() }}</span>
+      <span><strong>Project</strong> {{ projectKey() }}</span>
+      <span><strong>Sprint</strong> {{ context() ? selectedSprintName() : 'Unavailable' }}</span>
+    }
+  </div>
+  <span class="read-only"><span class="status-dot"></span> Forges read-only</span>
+</header>
+@if (testMode) {
+  <div class="test-banner" role="status">
+    <strong>TEST MODE — no changes saved</strong>
+    Real PRs and tickets. Creation, linking, sprint assignment and status changes are simulated. AI
+    drafting remains live.
+  </div>
+}
+
+<main id="workspace" class="workspace">
+  <section
+    class="workspace-heading flex flex-wrap items-end justify-between gap-4"
+    aria-labelledby="page-title"
+  >
+    <div>
+      <h1 id="page-title">Synchronize to JIRA</h1>
+      <p>Create a ticket from a pull request, or drag it onto work you’re already tracking.</p>
+    </div>
+    <div class="refresh-controls flex items-center gap-3">
+      @if (updatedAt()) {
+        <span class="muted">Last refreshed {{ updatedAt() }}</span>
+      }
+      <button
+        mat-stroked-button
+        (click)="refresh()"
+        [disabled]="!configured() || loading() || operationBusy()"
+      >
+        Refresh board
+      </button>
+    </div>
+  </section>
+
+  @if (configError()) {
+    <section class="setup-panel" aria-labelledby="setup-heading">
+      <h2 id="setup-heading">Connect your workspace</h2>
+      <p role="alert">{{ configError() }}</p>
+      <ol>
+        <li>
+          Copy <code>public/assets/config.example.json</code> to
+          <code>public/assets/config.json</code>.
+        </li>
+        <li>Add your read-only forge token, JIRA credentials, and LLM API key.</li>
+        <li>Restart with <code>npm start</code> to generate your local API proxy.</li>
+      </ol>
+      <p>
+        The configuration stays on this machine. Never expose the development server to your
+        network.
+      </p>
+    </section>
+  }
+  @if (storageWarning()) {
+    <p class="notice warning" role="alert">{{ storageWarning() }}</p>
+  }
+  @for (warning of warnings(); track $index) {
+    <p class="notice warning" role="alert">{{ warning }}</p>
+  }
+
+  @if (configured()) {
+    <div class="board-context flex flex-wrap items-center justify-between gap-3">
+      <div class="flex flex-wrap items-center gap-3">
+        <span class="sprint-label">{{
+          context() ? selectedSprintName() : 'Sprint unavailable'
+        }}</span>
+        <span class="muted">{{ unlinkedCount() }} PRs to track</span>
+        @if (closedCount()) {
+          <span class="closure-count">{{ closedCount() }} tickets with closed PRs</span>
+        }
+      </div>
+      <span class="muted">Manual refresh only</span>
+    </div>
+    <div class="loading-track" aria-live="polite">
+      @if (loading()) {
+        <mat-progress-bar
+          mode="indeterminate"
+          aria-label="Refreshing pull requests and JIRA tickets"
+        />
+      }
+    </div>
+
+    <div
+      cdkDropListGroup
+      class="board-grid grid grid-cols-1 lg:grid-cols-2 gap-4"
+      [attr.aria-busy]="loading()"
+    >
+      <section aria-labelledby="pull-requests-heading" class="board-column">
+        <div class="column-heading">
+          <div>
+            <h2 id="pull-requests-heading">
+              Your pull requests
+              <span class="count"
+                >{{ filteredPullRequests().length }} / {{ pullRequests().length }}</span
+              >
+            </h2>
+            <p>Authored by you across connected forges</p>
+          </div>
+          <span class="column-symbol" aria-hidden="true">↗</span>
+        </div>
+        <div class="column-controls">
+          <label class="filter-control">
+            Filter pull requests
+            <input
+              type="search"
+              placeholder="Title or PR number"
+              [formField]="filterFields.pullRequests"
+            />
+          </label>
+        </div>
+        <div
+          cdkDropList
+          id="pull-requests"
+          [cdkDropListData]="filteredPullRequests()"
+          [cdkDropListSortingDisabled]="true"
+          class="card-list"
+        >
+          @for (pr of filteredPullRequests(); track pr.id) {
+            @let state = states()[pr.url];
+            @let linked = linkedTickets(pr);
+            <mat-card
+              cdkDrag
+              [cdkDragData]="pr"
+              [cdkDragDisabled]="!canLink(pr)"
+              class="pr-card"
+              [class.synced-card]="linked.length > 0"
+              [class.partial-card]="state?.status === 'partial'"
+              [class.accepted-card]="isAccepted(pr)"
+            >
+              <mat-card-content>
+                <h3>
+                  <a [href]="pr.url" target="_blank" rel="noopener noreferrer">{{ pr.title }}</a>
+                </h3>
+                <div class="card-meta flex flex-wrap items-center gap-2">
+                  <span class="forge-badge">{{ pr.forge }}</span
+                  ><strong class="repository-name">{{ pr.repository }}</strong
+                  ><span>#{{ pr.number }}</span>
+                  <app-pr-activity [pr]="pr" [asOf]="refreshedAt()" />
+                  <span
+                    cdkDragHandle
+                    class="drag-handle"
+                    [class.drag-unavailable]="!canLink(pr)"
+                    aria-hidden="true"
+                    title="Drag onto a JIRA ticket"
+                    >⠿</span
+                  >
+                </div>
+                <app-pr-badges [pr]="pr" />
+                <p class="pr-description">
+                  {{ pr.description || 'No pull request description.' }}
+                </p>
+                <dl class="pr-people muted">
+                  <dt>Reviewers:</dt>
+                  <dd>
+                    {{ pr.reviewers.join(', ') || (pr.participantsError ? 'Unavailable' : 'None') }}
+                  </dd>
+                  <dt>Assignees:</dt>
+                  <dd>
+                    {{ pr.assignees.join(', ') || (pr.participantsError ? 'Unavailable' : 'None') }}
+                  </dd>
+                </dl>
+                @if (pr.participantsError) {
+                  <p class="inline-error" role="alert">{{ pr.participantsError }}</p>
+                }
+                @if (linked.length) {
+                  <p class="linked-tickets" role="status">
+                    <span>Linked to:</span>
+                    @for (receipt of linked; track receipt.key; let last = $last) {
+                      <a [href]="receipt.url" target="_blank" rel="noopener noreferrer">{{
+                        receipt.key
+                      }}</a
+                      >{{ last ? '' : ', ' }}
+                    }
+                  </p>
+                }
+                @if (reviews.receipts()[pr.url]?.length) {
+                  <p class="linked-tickets">
+                    <span>Review tickets:</span>
+                    @for (
+                      receipt of reviews.receipts()[pr.url];
+                      track receipt.key;
+                      let last = $last
+                    ) {
+                      <a [href]="receipt.url" target="_blank" rel="noopener noreferrer">{{
+                        receipt.key
+                      }}</a
+                      >{{ last ? '' : ', ' }}
+                    }
+                  </p>
+                }
+                @if (state?.status === 'synced' && state?.receipt?.simulated) {
+                  <p class="simulation-message" role="status">
+                    Test mode: {{ state.receipt.url ? 'link' : 'ticket creation' }} simulated. No
+                    changes saved.
+                    @if (state.receipt.url) {
+                      <a [href]="state.receipt.url" target="_blank" rel="noopener noreferrer">{{
+                        state.receipt.key
+                      }}</a>
+                    }
+                  </p>
+                }
+                @if (state?.status === 'partial' && state?.receipt; as receipt) {
+                  <p class="inline-error" role="alert">
+                    {{
+                      testMode
+                        ? 'Simulation incomplete. No changes saved.'
+                        : 'The ticket exists, but sync is incomplete.'
+                    }}
+                    {{ state?.error }}
+                  </p>
+                  @if (receipt.url) {
+                    <a
+                      class="ticket-link"
+                      [href]="receipt.url"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      >Open {{ receipt.key }} <span aria-hidden="true">↗</span></a
+                    >
+                  }
+                  <div class="card-actions">
+                    <button
+                      mat-stroked-button
+                      (click)="resume(pr)"
+                      [disabled]="loading() || operationBusy()"
+                    >
+                      Resume sync
+                    </button>
+                  </div>
+                } @else if (state?.status === 'uncertain') {
+                  <p class="inline-error" role="alert">
+                    Creation outcome unknown. Check JIRA for an existing ticket before trying again.
+                  </p>
+                  <a [href]="jiraHome()" target="_blank" rel="noopener noreferrer"
+                    >Check recent JIRA tickets</a
+                  >
+                  <div class="card-actions">
+                    <button
+                      mat-stroked-button
+                      (click)="allowRetry(pr)"
+                      [disabled]="operationBusy()"
+                    >
+                      I checked; allow retry
+                    </button>
+                  </div>
+                } @else {
+                  @if (state?.error) {
+                    <p class="inline-error" role="alert">{{ state?.error }}</p>
+                  }
+                  @if (prBusy(pr)) {
+                    <div class="busy-state" role="status">
+                      {{
+                        state?.status === 'suggesting'
+                          ? 'Preparing ticket for review…'
+                          : testMode
+                            ? 'Simulating sync…'
+                            : 'Updating JIRA…'
+                      }}
+                    </div>
+                    <mat-progress-bar
+                      mode="indeterminate"
+                      aria-label="Synchronizing pull request"
+                    />
+                    @if (state?.receipt; as receipt) {
+                      @if (receipt.url) {
+                        <a
+                          class="ticket-link"
+                          [href]="receipt.url"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          >Open {{ receipt.key }}</a
+                        >
+                      }
+                    }
+                  } @else {
+                    <div class="card-actions flex flex-wrap items-center gap-2">
+                      <button
+                        mat-flat-button
+                        (click)="suggest(pr)"
+                        [disabled]="loading() || operationBusy() || !context() || linked.length > 0"
+                        [title]="
+                          linked.length
+                            ? 'Already tracked in JIRA. Use Link existing to add another issue.'
+                            : ''
+                        "
+                      >
+                        Sync to JIRA
+                      </button>
+                      <button
+                        mat-button
+                        [matMenuTriggerFor]="ticketMenu"
+                        [disabled]="!canLink(pr) || !tickets().length"
+                        [attr.aria-label]="'Link PR ' + pr.number + ' to an existing JIRA ticket'"
+                      >
+                        Link existing
+                      </button>
+                      <mat-menu #ticketMenu="matMenu">
+                        @for (ticket of tickets(); track ticket.key) {
+                          <button
+                            mat-menu-item
+                            (click)="link(pr, ticket)"
+                            [disabled]="!canLink(pr, ticket)"
+                          >
+                            {{ ticket.key }} — {{ ticket.summary
+                            }}{{
+                              linked.some((receipt) => receipt.key === ticket.key)
+                                ? ' (linked)'
+                                : ''
+                            }}
+                          </button>
+                        }
+                      </mat-menu>
+                      @if (state?.status === 'error' && !linked.length) {
+                        <button
+                          mat-button
+                          (click)="suggest(pr, true)"
+                          [disabled]="loading() || operationBusy() || !context()"
+                        >
+                          Write ticket manually
+                        </button>
+                      }
+                    </div>
+                  }
+                }
+              </mat-card-content>
+            </mat-card>
+          } @empty {
+            <div class="empty-state">
+              <h3>
+                {{
+                  loading()
+                    ? 'Reading upstream pull requests…'
+                    : pullRequests().length
+                      ? 'No matching pull requests'
+                      : 'No open pull requests'
+                }}
+              </h3>
+              <p>
+                {{
+                  pullRequests().length
+                    ? 'Try another title or PR number, or clear the filter.'
+                    : 'Open PRs authored by your connected accounts appear here. Check any API warnings above.'
+                }}
+              </p>
+            </div>
+          }
+        </div>
+      </section>
+
+      <section aria-labelledby="jira-heading" class="board-column">
+        <div class="column-heading">
+          <div>
+            <h2 id="jira-heading">
+              Your JIRA tickets
+              <span class="count">{{ filteredTickets().length }} / {{ tickets().length }}</span>
+            </h2>
+            <p>Unfinished work assigned to you in {{ projectKey() }}</p>
+          </div>
+          <span class="column-symbol" aria-hidden="true">▤</span>
+        </div>
+        <div class="column-controls">
+          <label class="filter-control sprint-filter">
+            Sprint
+            <select
+              #sprintSelector
+              [formField]="filterFields.sprint"
+              (change)="selectSprint(sprintSelector.value)"
+            >
+              @if (filters().sprint === 'default') {
+                <option value="default">Loading sprints…</option>
+              }
+              <option value="none">No sprint assigned</option>
+              @for (sprint of context()?.sprints ?? []; track sprint.id) {
+                <option [value]="sprint.id.toString()">
+                  {{ sprint.name }} ({{ sprint.state }})
+                </option>
+              }
+            </select>
+          </label>
+          <label class="filter-control">
+            Filter tickets
+            <input
+              type="search"
+              placeholder="Title or ticket key"
+              [formField]="filterFields.tickets"
+            />
+          </label>
+        </div>
+        <div class="card-list">
+          @for (ticket of filteredTickets(); track ticket.key) {
+            <mat-card
+              cdkDropList
+              [id]="ticket.key"
+              [cdkDropListData]="ticket"
+              [cdkDropListEnterPredicate]="canEnterTicket"
+              [cdkDropListSortingDisabled]="true"
+              [cdkDropListDisabled]="loading() || operationBusy() || !context() || !!ticket.closed"
+              (cdkDropListDropped)="drop($event, ticket)"
+              class="jira-card"
+              [class.closure-card]="hasClosedPr(ticket)"
+            >
+              <mat-card-content>
+                <div class="card-meta flex flex-wrap items-center justify-between gap-2">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <a
+                      class="issue-key"
+                      [href]="ticket.url"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      >{{ ticket.key }}</a
+                    >
+                    <span class="issue-type jira-status">{{ ticket.issueType }}</span>
+                  </div>
+                  <span class="jira-status">{{ ticket.status }}</span>
+                </div>
+                <h3>{{ ticket.summary }}</h3>
+                <p class="pr-description">{{ ticket.description || 'No ticket description.' }}</p>
+                @if (ticket.linkError) {
+                  <p class="inline-error" role="alert">
+                    Could not read Web Links. {{ ticket.linkError }}
+                  </p>
+                }
+                @if (ticket.pullRequests.length) {
+                  <h4 class="linked-pr-heading">Linked pull requests</h4>
+                }
+                @for (pr of ticket.pullRequests; track pr.url) {
+                  <div class="linked-pr">
+                    <a [href]="pr.url" [title]="pr.url" target="_blank" rel="noopener noreferrer"
+                      >{{ pr.title || pr.url }}
+                      @if (pr.title && pr.title !== pr.url) {
+                        <span class="linked-pr-url">{{ pr.url }}</span>
+                      }</a
+                    ><span class="pr-status">{{ pr.state ?? 'Status unknown' }}</span>
+                  </div>
+                  @if (pr.error) {
+                    <p class="inline-error">{{ pr.error }}</p>
+                  }
+                }
+                @if (hasClosedPr(ticket)) {
+                  <div class="closure-prompt">
+                    <strong>Upstream work has closed</strong>
+                    <p>
+                      {{
+                        canClose(ticket)
+                          ? 'All tracked PRs are closed or merged. Finish the ticket when the work is complete.'
+                          : 'Other linked PRs are still open or could not be checked. Review them before closing.'
+                      }}
+                    </p>
+                    <button
+                      mat-flat-button
+                      (click)="closeTicket(ticket)"
+                      [disabled]="!canClose(ticket) || loading() || operationBusy() || !context()"
+                    >
+                      {{ ticketBusy()[ticket.key] ? 'Closing ticket…' : 'Close JIRA Ticket' }}
+                    </button>
+                  </div>
+                } @else if (!ticket.closed) {
+                  <p class="drop-hint">Drop a pull request here to link it</p>
+                }
+                @if (ticketMessages()[ticket.key]) {
+                  <p class="ticket-message" role="status">{{ ticketMessages()[ticket.key] }}</p>
+                }
+              </mat-card-content>
+            </mat-card>
+          } @empty {
+            <div class="empty-state">
+              <h3>
+                {{
+                  loading()
+                    ? 'Reading your tickets…'
+                    : tickets().length
+                      ? 'No matching tickets'
+                      : 'No tickets to show'
+                }}
+              </h3>
+              <p>
+                {{
+                  tickets().length
+                    ? 'Try another title or ticket key, or clear the filter.'
+                    : 'Unfinished tickets assigned to you in the selected sprint (or with no sprint assigned) appear here.'
+                }}
+              </p>
+            </div>
+          }
+        </div>
+      </section>
+    </div>
+    @if (savedLinks().length) {
+      <section class="saved-links" aria-labelledby="saved-links-heading">
+        <h2 id="saved-links-heading">Saved JIRA links</h2>
+        <p class="muted">
+          Receipts for PRs no longer in the open list. These links are kept on this browser.
+        </p>
+        @for (saved of savedLinks(); track saved.url + saved.receipt.key) {
+          <div class="saved-link">
+            <a
+              class="ticket-link"
+              [href]="saved.receipt.url"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Open {{ saved.receipt.key }}</a
+            >
+            <a [href]="saved.url" target="_blank" rel="noopener noreferrer">Upstream PR</a>
+            @if (saved.partial) {
+              <span class="inline-error">Sync incomplete. Review this ticket in JIRA.</span>
+            }
+          </div>
+        }
+      </section>
+    }
+    <footer class="workspace-footer">
+      Pull requests are never changed. Titles and descriptions are sent to your configured AI
+      provider only when you choose “Sync to JIRA”.
+    </footer>
+  }
+</main>

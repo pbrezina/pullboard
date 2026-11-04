@@ -1,0 +1,23 @@
+{
+  "forges": [
+    {
+      "type": "github",
+      "token": "github-read-only-token",
+      "apiUrl": "https://api.github.com",
+      "webUrl": "https://github.com"
+    }
+  ],
+  "jira": {
+    "sprintNamePattern": "%YEAR-IDM-SSSD-IDENTITY-S%NUMBER",
+    "email": "developer@example.com",
+    "apiToken": "jira-api-token",
+    "baseUrl": "https://your-team.atlassian.net",
+    "projectKey": "DEV",
+    "boardId": 12345
+  },
+  "llm": {
+    "provider": "openai",
+    "apiKey": "openai-api-key",
+    "model": "gpt-6-luna"
+  }
+}

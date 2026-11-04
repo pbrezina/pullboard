@@ -1,0 +1,15 @@
+[book]
+title = "Pullboard documentation"
+authors = ["Pullboard contributors"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+no-section-label = true
+git-repository-url = ""
+default-theme = "light"
+preferred-dark-theme = "navy"
+additional-css = ["theme/pullboard.css"]

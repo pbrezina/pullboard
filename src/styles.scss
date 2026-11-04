@@ -1,0 +1,53 @@
+@use '@angular/material' as mat;
+
+html {
+  color-scheme: light;
+  @include mat.theme(
+    (
+      color: (
+        primary: mat.$azure-palette,
+        tertiary: mat.$blue-palette,
+      ),
+      typography: 'Segoe UI',
+      density: -3,
+    )
+  );
+}
+body {
+  margin: 0;
+  background: #f4f6fa;
+  color: #17243b;
+  font:
+    13px/1.45 'Segoe UI',
+    system-ui,
+    sans-serif;
+}
+* {
+  box-sizing: border-box;
+}
+a,
+button,
+input,
+textarea {
+  touch-action: manipulation;
+}
+:focus-visible {
+  outline: 3px solid #2459c4;
+  outline-offset: 3px;
+}
+code {
+  background: #edf0f5;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

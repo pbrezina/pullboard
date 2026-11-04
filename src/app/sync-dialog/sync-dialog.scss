@@ -1,0 +1,49 @@
+mat-form-field {
+  display: block;
+  margin-top: 12px;
+}
+.estimate {
+  max-width: 200px;
+}
+p {
+  max-width: 70ch;
+  color: #4e5d73;
+}
+.destination {
+  font-size: 13px;
+}
+.sprint-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.sprint-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+}
+.sprint-select {
+  flex: 1;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+select {
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid #a8b5c9;
+  border-radius: 4px;
+  color: #17243b;
+  background: #fff;
+  font: inherit;
+}
+.test-notice {
+  padding: 8px 12px;
+  color: #6e4b10;
+  background: #fff8e9;
+  border: 1px solid #dbbf8d;
+}

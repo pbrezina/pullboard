@@ -1,0 +1,82 @@
+<h2 mat-dialog-title>{{ data.titlePrefix ? 'Create review ticket' : 'Review new JIRA ticket' }}</h2>
+<form (submit)="confirm($event)">
+  <mat-dialog-content>
+    @if (testMode) {
+      <p class="test-notice" role="status">
+        Test mode: creation is simulated. Nothing will be saved to JIRA.
+      </p>
+    }
+    <p>
+      {{
+        data.generated
+          ? 'AI suggestions are a starting point. Review the scope and estimate before creating.'
+          : 'Describe the work and choose an estimate.'
+      }}
+    </p>
+    @if (data.previousTickets?.length) {
+      <p class="test-notice" role="status">
+        Review tickets already created in this browser:
+        @for (ticket of data.previousTickets; track ticket.key) {
+          <a [href]="ticket.url" target="_blank" rel="noopener noreferrer">{{ ticket.key }}</a>
+        }
+        Confirming will create an additional review ticket.
+      </p>
+    }
+    @if (data.titlePrefix) {
+      <p>
+        Title prefix: <strong>{{ data.titlePrefix }}:</strong>
+      </p>
+    }
+    <mat-form-field appearance="outline">
+      <mat-label>{{ data.titlePrefix ? 'Title summary' : 'Title' }}</mat-label>
+      <input matInput [formField]="fields.title" />
+      <mat-error>Enter a non-empty title; the full title must fit within 255 characters.</mat-error>
+    </mat-form-field>
+    <mat-form-field appearance="outline">
+      <mat-label>Description</mat-label>
+      <textarea matInput [formField]="fields.description" rows="6"></textarea>
+      <mat-error>Enter a description.</mat-error>
+    </mat-form-field>
+    <mat-form-field appearance="outline" class="estimate">
+      <mat-label>Story points</mat-label>
+      <input matInput type="number" [formField]="fields.storyPoints" />
+      <mat-error>Enter an estimate between 0 and 100.</mat-error>
+    </mat-form-field>
+    <div class="sprint-controls">
+      <label class="sprint-checkbox">
+        <input type="checkbox" [formField]="fields.addToSprint" />
+        Add to sprint
+      </label>
+      <label class="sprint-select">
+        Sprint
+        <select [formField]="fields.sprintId">
+          <option value="">Select a sprint</option>
+          @for (sprint of data.sprints; track sprint.id) {
+            <option [value]="sprint.id.toString()">{{ sprint.name }} ({{ sprint.state }})</option>
+          }
+        </select>
+      </label>
+    </div>
+    @if (fields.sprintId().touched() && fields.sprintId().invalid()) {
+      <p role="alert">Select an active or future sprint.</p>
+    }
+    @if (data.titlePrefix) {
+      <p class="destination">
+        Unassigned{{ model().addToSprint ? ' in the selected sprint' : ', without a sprint' }}.
+        Destination status: <strong>JIRA default</strong>. The PR will be added to Web Links.
+      </p>
+    } @else {
+      <p class="destination">
+        Assigned to you{{ model().addToSprint ? ' in the selected sprint' : ', without a sprint' }}.
+        Destination status: <strong>{{ data.draft ? 'In Progress' : 'Review' }}</strong> (or your
+        configured equivalent).
+      </p>
+    }
+  </mat-dialog-content>
+  <mat-dialog-actions align="end">
+    <button mat-button type="button" mat-dialog-close>Cancel</button>
+    <button mat-flat-button type="submit" [disabled]="fields().invalid()">
+      {{ testMode ? 'Simulate ticket creation' : 'Create JIRA ticket' }}
+    </button>
+  </mat-dialog-actions>
+</form>

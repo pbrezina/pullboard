@@ -1,0 +1,8 @@
+<span class="state-badge" [class.draft-badge]="pr().draft" [class.ready-badge]="!pr().draft">
+  {{ pr().draft ? 'Draft' : 'Ready for review' }}
+</span>
+@for (label of labels(); track label) {
+  <span class="label-badge" [class.accepted-badge]="label.toLowerCase() === 'accepted'">{{
+    label
+  }}</span>
+}

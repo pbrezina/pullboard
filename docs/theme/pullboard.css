@@ -1,0 +1,7 @@
+/* Pullboard documentation styling. */
+.content main {
+  max-width: 80ch;
+}
+pre {
+  border-radius: 4px;
+}

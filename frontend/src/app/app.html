@@ -1,0 +1,158 @@
+<a class="skip-link" href="#main-content">Skip to board</a>
+<header class="app-header">
+  <div class="header-inner">
+    <div class="brand">
+      <svg width="30" height="32" viewBox="0 0 30 32" fill="none" aria-hidden="true">
+        <path
+          d="M6 25V7h10a6 6 0 0 1 0 12H6M23 26V5"
+          stroke="currentColor"
+          stroke-width="3"
+          stroke-linecap="round"
+        />
+        <circle cx="23" cy="26" r="3" fill="currentColor" />
+      </svg>
+      <div>
+        <h1 translate="no">PullBoard</h1>
+        <span>Your work, without the noise.</span>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div class="sync-indicator" role="status">
+        <span
+          class="health-dot"
+          [class.warning]="!!store.error() || sourceFailure()"
+          [class.pending]="store.sync()?.state === 'syncing' && !sourceFailure()"
+          aria-hidden="true"
+        ></span
+        ><strong>{{
+          store.sync()?.state === 'syncing'
+            ? 'Syncing sources…'
+            : store.loading()
+              ? 'Checking snapshot…'
+              : 'Local workspace'
+        }}</strong
+        ><span>Last sync <pb-time [value]="store.sync()?.last_success_at ?? null" /></span>
+      </div>
+      <button
+        class="refresh-button"
+        [disabled]="store.refreshing() || store.sync()?.state === 'syncing'"
+        (click)="store.refresh()"
+      >
+        <span aria-hidden="true">↻</span>
+        {{ store.refreshing() || store.sync()?.state === 'syncing' ? 'Refreshing…' : 'Refresh' }}
+      </button>
+      <div class="theme-toggle" role="group" aria-label="Color theme">
+        <button
+          aria-label="Light theme"
+          title="Light theme"
+          [attr.aria-pressed]="preferences.value().theme === 'light'"
+          (click)="preferences.setTheme('light')"
+        >
+          <span aria-hidden="true">☀</span></button
+        ><button
+          aria-label="System theme"
+          title="System theme"
+          [attr.aria-pressed]="preferences.value().theme === 'system'"
+          (click)="preferences.setTheme('system')"
+        >
+          <span aria-hidden="true">◐</span></button
+        ><button
+          aria-label="Dark theme"
+          title="Dark theme"
+          [attr.aria-pressed]="preferences.value().theme === 'dark'"
+          (click)="preferences.setTheme('dark')"
+        >
+          <span aria-hidden="true">☾</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</header>
+<div class="workspace-shell">
+  @if (store.context(); as context) {
+    <app-identity-bar [context]="context" />
+  }
+  <aside class="read-only-strip" aria-label="Runtime Jira action mode">
+    @if (mode.value(); as current) {
+      <strong
+        class="chip"
+        role="status"
+        [class.warning]="!current.read_only_test_mode"
+        [class.ready]="current.read_only_test_mode"
+        >{{ current.read_only_test_mode ? 'Test mode' : 'Live mode' }}</strong
+      >
+      <span
+        >{{
+          current.read_only_test_mode
+            ? 'Read-only test mode. Jira actions are simulated. No upstream writes.'
+            : 'Explicit Jira submissions write upstream.'
+        }}
+        Admitted live actions may finish after switching to Test.</span
+      >
+      <button
+        class="small-button"
+        [disabled]="mode.changing() || !!mode.error()"
+        (click)="changeMode()"
+      >
+        {{ current.read_only_test_mode ? 'Switch to Live' : 'Switch to Test' }}
+      </button>
+    } @else {
+      <span>Checking runtime mode… Jira actions are unavailable.</span>
+    }
+    @if (mode.error()) {
+      <span class="error-text" role="status">{{ mode.error() }}</span
+      ><button (click)="mode.refresh()">Check mode</button>
+    }
+  </aside>
+  @if (store.error()) {
+    <div class="error-banner workspace-error" role="alert">
+      <span>{{ store.error() }} Last good data, if available, stays visible.</span
+      ><button (click)="store.reload()" [disabled]="store.loading()">Retry</button>
+    </div>
+  }
+  <app-source-health
+    [sources]="sources()"
+    [progress]="store.sync()?.progress ?? []"
+    [syncing]="store.sync()?.state === 'syncing'"
+  />
+  <main id="main-content" tabindex="-1"><app-board-view /></main>
+  <footer class="app-footer">
+    <span
+      >PullBoard <span translate="no">{{ store.health()?.version || '' }}</span></span
+    ><span
+      >Snapshot {{ store.board()?.revision ?? '—' }} / Updated
+      <pb-time [value]="store.board()?.generated_at ?? null"
+    /></span>
+  </footer>
+</div>
+<section
+  class="toast-region"
+  aria-label="Notifications"
+  aria-live="polite"
+  aria-relevant="additions text"
+>
+  @for (notice of notices.items(); track notice.id) {
+    <div
+      class="toast"
+      [class.toast-error]="notice.kind === 'error'"
+      [class.toast-warning]="notice.kind === 'warning'"
+    >
+      <div>
+        <strong>{{
+          notice.kind === 'error' ? 'Notice' : notice.kind === 'warning' ? 'Warning' : 'Success'
+        }}</strong>
+        <p>{{ notice.message }}</p>
+        @if (notice.url) {
+          <pb-link [url]="notice.url">Open {{ notice.label || 'ticket' }}</pb-link>
+        }
+      </div>
+      <button
+        class="icon-button"
+        (click)="notices.dismiss(notice.id)"
+        aria-label="Dismiss notification"
+      >
+        ×
+      </button>
+    </div>
+  }
+</section>

@@ -1,0 +1,146 @@
+@if (liveRows().length) {
+  <div class="source-progress-grid" role="group" aria-label="Per-source refresh progress">
+    @for (row of liveRows(); track row.source.source_id) {
+      <section
+        class="source-progress"
+        [class.source-completed]="row.source.status === 'ok' && row.progress?.phase === 'completed'"
+        [class.source-failed]="
+          row.source.status === 'error' ||
+          row.source.status === 'backoff' ||
+          row.progress?.phase === 'failed' ||
+          row.progress?.phase === 'backoff'
+        "
+        [attr.aria-label]="row.source.name + ' refresh'"
+      >
+        <header>
+          <strong>{{ row.source.name }}</strong
+          ><span role="status">{{ row.progress?.phase ?? row.source.status }}</span>
+        </header>
+        @if (row.progress; as p) {
+          @if (p.total_items === 0 || (p.total_items === null && !active(p))) {
+            <div class="progress-track" aria-hidden="true"></div>
+          } @else {
+            <progress
+              [attr.aria-label]="row.source.name + ' evaluated items'"
+              [attr.value]="fraction(p)"
+              [attr.max]="p.total_items && p.total_items > 0 ? p.total_items : 1"
+            ></progress>
+          }
+          <p>
+            {{ p.completed_items
+            }}{{
+              p.total_items === null
+                ? ' evaluated / total unknown'
+                : ' / ' + p.total_items + ' evaluated'
+            }}
+            <span>{{ duration(p.elapsed_ms) }}</span>
+          </p>
+          @if (p.phase === 'publishing') {
+            <small>Fetched; waiting for atomic publication.</small>
+          }
+        }
+        @if (
+          row.progress?.phase === 'failed' ||
+          row.progress?.phase === 'backoff' ||
+          row.source.status === 'error' ||
+          row.source.status === 'backoff'
+        ) {
+          <p class="error-text" role="status">
+            {{
+              row.source.error ||
+                (row.progress?.phase === 'backoff' ? 'Waiting for retry.' : 'Refresh failed.')
+            }}
+            {{
+              row.source.last_success_at
+                ? 'Stale snapshot retained.'
+                : 'No successful snapshot yet.'
+            }}
+          </p>
+        }
+      </section>
+    }
+  </div>
+}
+<details class="health-panel" [class.degraded]="degraded() > 0">
+  <summary>
+    <span
+      class="health-dot"
+      [class.warning]="degraded() > 0"
+      [class.pending]="refreshing() && !degraded()"
+      aria-hidden="true"
+    ></span>
+    <strong>Source health</strong>
+    <span>{{
+      sources().length
+        ? degraded()
+          ? degraded() + ' source(s) need attention'
+          : refreshing()
+            ? 'Refresh in progress'
+            : 'All sources up to date'
+        : 'No sources configured'
+    }}</span>
+    <span class="summary-hint">Details</span>
+  </summary>
+  <div class="health-grid">
+    @for (row of rows(); track row.source.source_id) {
+      @let source = row.source;
+      <section class="source-detail" [attr.aria-label]="source.name + ' health'">
+        <header>
+          <strong>{{ source.name }}</strong
+          ><span
+            class="chip"
+            [class.ready]="source.status === 'ok'"
+            [class.warning]="source.status !== 'ok'"
+            >{{ source.status }}</span
+          >
+        </header>
+        <span class="muted" translate="no">{{ source.source_id }} / {{ source.kind }}</span>
+        @if (row.progress; as p) {
+          <p class="progress-history">
+            {{ p.phase }}: {{ p.completed_items
+            }}{{
+              p.total_items === null
+                ? ' evaluated / total unknown'
+                : ' / ' + p.total_items + ' evaluated'
+            }}
+            / {{ duration(p.elapsed_ms) }}
+          </p>
+        }
+        <dl class="health-times">
+          <div>
+            <dt>Last success</dt>
+            <dd><pb-time [value]="source.last_success_at" /></dd>
+          </div>
+          <div>
+            <dt>Last attempt</dt>
+            <dd><pb-time [value]="source.last_attempt_at" /></dd>
+          </div>
+        </dl>
+        @if (source.error) {
+          <p class="error-text">
+            {{ source.error }}
+            {{
+              source.last_success_at
+                ? 'Last good snapshot is retained.'
+                : 'No successful snapshot yet.'
+            }}
+          </p>
+        }
+        @if (source.retry_at) {
+          <p class="warning-text">
+            Retry at
+            <time [attr.datetime]="source.retry_at">{{ formatTime(source.retry_at) }}</time>
+          </p>
+        }
+        @if (source.coverage_notes.length) {
+          <div class="coverage-note">
+            <strong>Coverage information</strong>
+            @for (note of source.coverage_notes; track $index) {
+              <p>{{ note }}</p>
+            }
+          </div>
+        }
+      </section>
+    }
+  </div>
+</details>

@@ -1,0 +1,17 @@
+{
+  "read_only_test_mode": true,
+  "mode_revision": "mode_mock_boot_a_test_1",
+  "refresh_interval_seconds": 3600,
+  "identities": [
+    {"source_id": "jira", "kind": "jira", "account_id": "jira-me", "display_name": "Alex Example", "username": "", "profile_url": null}
+  ],
+  "current_project": {"key": "IDM", "name": "Identity Management", "issue_types": ["Story", "Task"]},
+  "current_sprints": [
+    {"id": "89396", "board_id": 14585, "team": null, "name": "2026-IDM-SSSD-IDENTITY-S12", "state": "active", "default_eligible": true, "board_url": "https://jira.example.test/secure/RapidBoard.jspa?rapidView=14585", "start_at": null, "end_at": null}
+  ],
+  "jira_projects": [
+    {"key": "IDM", "name": "Identity Management", "issue_types": ["Story", "Task"]},
+    {"key": "CORE", "name": "Core Platform", "issue_types": ["Task"]}
+  ],
+  "ai": {"enabled": false, "provider": null, "model": null}
+}

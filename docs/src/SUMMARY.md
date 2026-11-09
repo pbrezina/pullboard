@@ -1,37 +1,18 @@
 # Summary
 
-[Introduction](introduction.md)
+[Introduction](README.md)
 
-# Quick Start
-
-- [Installation](quickstart/install.md)
-- [First Run](quickstart/first-run.md)
-
-# Setup Guides
-
-- [Authentication and Permissions](user/authentication.md)
-- [API Proxy Setup](user/reverse-proxy.md)
-- [Dashboard](user/dashboard.md)
-- [Test Mode](user/test-mode.md)
-
-# Pull Request Lifecycle
-
-- [Create a Ticket](user/lifecycle/creation.md)
-- [Link Existing Work](user/lifecycle/linking.md)
-- [Close Tracked Work](user/lifecycle/closing.md)
-
-# Reference
-
-- [Configuration](user/configuration.md)
-- [Troubleshooting](user/troubleshooting.md)
-
-# API Reference
-
-- [Remote Endpoints](api/endpoints.md)
-
-# Developer Guide
-
-- [Architecture](developer/architecture.md)
-- [Forge Providers](developer/forge-providers.md)
-- [WebUI](developer/webui.md)
-- [Contributing](developer/contributing.md)
+- [Quickstart and container operation](quickstart.md)
+- [One YAML configuration](configuration.md)
+- [Credentials and native keyrings](credentials.md)
+  - [Restricted Linux container bridge](keyring-container.md)
+- [Providers and permissions](providers.md)
+- [Jira fields, teams and workflows](jira.md)
+- [Attention and the dashboard](attention.md)
+- [Upstream issues to Jira](upstream-issues.md)
+- [Ticket creation, linking and AI](tickets-ai.md)
+- [Security, snapshots and refresh](security-cache.md)
+- [REST API](api.md)
+- [Architecture and contributor boundaries](architecture.md)
+- [Development, testing and CI](development.md)
+- [Troubleshooting](troubleshooting.md)

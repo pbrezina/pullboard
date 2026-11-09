@@ -1,0 +1,14 @@
+<div class="attention-reasons" role="group" aria-label="Attention reasons">
+  @for (link of reasonLinks(); track link.reason) {
+    <span class="card-tag attention-tag"
+      ><pb-link [url]="link.url" [label]="labels[link.reason]">{{
+        labels[link.reason]
+      }}</pb-link></span
+    >
+  }
+  @if (showWaiting()) {
+    <span class="attention-waiting"
+      >Waiting since <pb-time [value]="attention().waiting_since"
+    /></span>
+  }
+</div>

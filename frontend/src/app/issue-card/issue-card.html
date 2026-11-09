@@ -1,0 +1,72 @@
+<article
+  class="work-card jira-card"
+  [class.needs-attention]="!!issue().attention"
+  [attr.data-issue-kind]="kind()"
+  cdkDropList
+  [cdkDropListData]="issue()"
+  [cdkDropListDisabled]="!canLink()"
+  [cdkDropListSortingDisabled]="true"
+  (cdkDropListDropped)="drop($event)"
+  [attr.aria-label]="issue().key + ': ' + issue().title"
+>
+  <div class="card-meta">
+    <pb-link class="issue-key" [url]="issue().url" [label]="issue().key"
+      ><span translate="no">{{ issue().key }}</span></pb-link
+    >
+    <span class="card-tag issue-type"
+      ><span aria-hidden="true">{{
+        kind() === 'bug' ? '●' : kind() === 'epic' ? 'ϟ' : kind() === 'story' ? '◇' : '✓'
+      }}</span
+      >{{ issue().issue_type }}</span
+    >
+    <span class="card-tag status-chip">{{ issue().status }}</span>
+  </div>
+  <h3 class="card-title">
+    <pb-link [url]="issue().url" [label]="issue().title">{{ issue().title }}</pb-link>
+  </h3>
+  <p class="card-preview">{{ issue().description || 'No description provided.' }}</p>
+  <div class="linked-items linked-pull-requests">
+    <h4>Linked pull requests</h4>
+    @for (link of linked(); track link.id) {
+      <div class="linked-pr">
+        @if (link.pr; as pr) {
+          <pb-link [url]="pr.url" [label]="pr.url"
+            >{{ pr.title }}<span class="linked-pr-url">{{ pr.url }}</span></pb-link
+          >
+          <span class="card-tag" [class.ready]="pr.state === 'ready'">{{
+            pr.state === 'draft' ? 'Draft' : 'Ready for review'
+          }}</span>
+        } @else {
+          <span>{{ link.id }}</span>
+        }
+      </div>
+    } @empty {
+      <span class="muted">None linked</span>
+    }
+  </div>
+  @if (issue().attention; as attention) {
+    <app-attention-detail [attention]="attention" />
+  }
+  @if (source(); as health) {
+    @if (health.status !== 'ok') {
+      <p class="source-warning">
+        {{
+          health.status === 'error' || health.status === 'backoff'
+            ? 'Stale snapshot'
+            : health.status
+        }}
+        / {{ health.source_id }}
+      </p>
+    }
+  }
+  <footer class="card-footer">
+    <button
+      class="card-secondary-action"
+      [disabled]="!canLink() || !mode.value() || !!mode.error()"
+      [title]="canLink() ? '' : 'Linking is only available for configured Jira projects.'"
+      (click)="linkRequested.emit(issue())"
+    >
+      Link pull request
+    </button>
+  </footer>
+</article>

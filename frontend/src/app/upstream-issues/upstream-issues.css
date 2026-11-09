@@ -1,0 +1,110 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+.url-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 16px 0 12px;
+}
+.url-form > label {
+  min-width: 0;
+}
+.url-help {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.lookup-status {
+  font-size: 12px;
+  padding-bottom: 10px;
+}
+.list-heading {
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 0;
+  border-top: 2px solid var(--line);
+}
+.issue-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.upstream-row {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 104px;
+}
+.upstream-row:last-child {
+  border-bottom: 1px solid var(--line);
+}
+.upstream-row:focus-within {
+  background: color-mix(in srgb, var(--accent-soft) 35%, var(--surface));
+}
+.upstream-row article {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 14px;
+}
+.issue-content {
+  flex: 1;
+  min-width: 0;
+}
+.upstream-row button {
+  flex-shrink: 0;
+}
+.issue-snippet {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.issue-details {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  margin-top: 4px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.reporter {
+  color: var(--muted);
+  margin-right: 6px;
+}
+.empty-list {
+  padding: 24px;
+  border: 1px dashed var(--line);
+  text-align: center;
+}
+.empty-list h3 {
+  font-size: 14px;
+}
+.empty-list p {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 8px;
+}
+@media (max-width: 700px) {
+  .url-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .upstream-row article {
+    align-items: start;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .issue-content {
+    width: 100%;
+  }
+  .upstream-row button {
+    align-self: flex-end;
+  }
+}

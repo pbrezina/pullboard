@@ -1,0 +1,90 @@
+<form class="dialog-shell link-dialog" (submit)="link($event)">
+  <header class="dialog-header">
+    <div>
+      <h2 id="link-heading">Link PR to Jira</h2>
+      <p>Use cached work items. The link is written only after confirmation.</p>
+    </div>
+    <button
+      type="button"
+      class="icon-button"
+      aria-label="Close link dialog"
+      [disabled]="busy()"
+      (click)="ref.close()"
+    >
+      ×
+    </button>
+  </header>
+  <div class="dialog-body">
+    @if (error()) {
+      <p class="error-banner" role="alert">{{ error() }}</p>
+    }
+    @if (review.stale()) {
+      <div class="warning-banner" role="status">
+        Runtime mode changed or cannot be verified. Selections are preserved; nothing is retried.
+        <button type="button" (click)="review.review()" [disabled]="busy()">
+          Review current mode
+        </button>
+      </div>
+    }
+    @if (review.captured().read_only_test_mode) {
+      <p class="simulation-banner">
+        Read-only test mode. Linking will be simulated without changing Jira or this board.
+      </p>
+    } @else {
+      <p class="warning-banner">
+        Live action: linking writes to Jira. Once admitted, it may finish even after switching to
+        Test.
+      </p>
+    }
+    <label
+      >Find {{ data.issueKey ? 'a PR' : 'a Jira ticket'
+      }}<input
+        type="search"
+        [formField]="fields.query"
+        placeholder="Filter by title…"
+        autocomplete="off"
+    /></label>
+    @if (data.issueKey) {
+      <p>
+        Jira ticket: <strong>{{ data.issueKey }}</strong>
+      </p>
+    } @else {
+      <label for="link-issue">Jira ticket</label
+      ><select id="link-issue" [formField]="fields.issue">
+        <option value="">Choose a Jira ticket</option>
+        @for (issue of issues(); track issue.id) {
+          <option [value]="issue.key">{{ issue.key }} / {{ issue.title }}</option>
+        }
+      </select>
+      @if (!issues().length) {
+        <p class="muted">No cached Jira tickets match. Refresh or clear your search.</p>
+      }
+    }
+    @if (data.prId) {
+      <p>
+        PR: <strong>{{ selectedTitle() }}</strong>
+      </p>
+    } @else {
+      <label for="link-pr">Pull request</label
+      ><select id="link-pr" [formField]="fields.pr">
+        <option value="">Choose a PR</option>
+        @for (pr of prs(); track pr.id) {
+          <option [value]="pr.id">
+            {{ pr.source_id }} / {{ pr.repository }} #{{ pr.number }} / {{ pr.title }}
+          </option>
+        }
+      </select>
+      @if (!prs().length) {
+        <p class="muted">No cached PRs match. Refresh or clear your search.</p>
+      }
+    }
+  </div>
+  <footer class="dialog-footer">
+    <button type="button" [disabled]="busy()" (click)="ref.close()">Cancel</button
+    ><button type="submit" class="primary-button" [disabled]="!canLink()">
+      {{
+        busy() ? 'Linking…' : review.captured().read_only_test_mode ? 'Simulate link' : 'Link PR'
+      }}
+    </button>
+  </footer>
+</form>

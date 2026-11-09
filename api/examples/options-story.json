@@ -1,0 +1,27 @@
+{
+  "project_key": "IDM",
+  "purpose": "implementation",
+  "issue_type": "Story",
+  "assignees": [
+    {"id": "jira-me", "username": "", "display_name": "Alex Example", "url": null, "email": "alex@example.test"},
+    {"id": "jira-other", "username": "", "display_name": "Sam Example", "url": null, "email": null}
+  ],
+  "sprints": [
+    {"id": "22569", "board_id": 14585, "team": null, "name": "2026-CORE-S12", "state": "active", "default_eligible": false, "board_url": "https://jira.example.test/secure/RapidBoard.jspa?rapidView=14585", "start_at": null, "end_at": null},
+    {"id": "89396", "board_id": 14585, "team": null, "name": "2026-IDM-SSSD-IDENTITY-S12", "state": "active", "default_eligible": true, "board_url": "https://jira.example.test/secure/RapidBoard.jspa?rapidView=14585", "start_at": null, "end_at": null},
+    {"id": "89397", "board_id": 14585, "team": null, "name": "2026-IDM-SSSD-IDENTITY-S13", "state": "future", "default_eligible": false, "board_url": "https://jira.example.test/secure/RapidBoard.jspa?rapidView=14585", "start_at": null, "end_at": null}
+  ],
+  "issue_types": ["Story", "Task"],
+  "teams": [],
+  "statuses": [{"id": "mock-status-backlog", "name": "Backlog"}, {"id": "mock-status-progress", "name": "In Progress"}],
+  "defaults": {"issue_type": "Task", "assignee_id": null, "team": null, "sprint_id": null, "workflow": {"draft": null, "ready": null}},
+  "capabilities": {
+    "can_create": true,
+    "unassigned_allowed": true,
+    "story_points": {"mode": "create", "required": false, "diagnostic": null},
+    "team": {"mode": "unsupported", "required": false, "diagnostic": {"code": "team_unsupported", "field": "team", "message": "This issue type has no supported team field. Leave it empty."}},
+    "sprint": {"mode": "create", "required": false, "diagnostic": null},
+    "blockers": []
+  },
+  "diagnostics": []
+}

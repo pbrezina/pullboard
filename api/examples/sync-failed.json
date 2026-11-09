@@ -1,0 +1,14 @@
+{
+  "state": "idle",
+  "started_at": "2026-11-09T12:00:00Z",
+  "finished_at": "2026-11-09T12:00:14Z",
+  "last_success_at": "2026-11-09T11:00:14Z",
+  "sources": [
+    {"source_id": "jira", "name": "Work Jira", "kind": "jira", "status": "ok", "last_success_at": "2026-11-09T12:00:14Z", "last_attempt_at": "2026-11-09T12:00:00Z", "error": null, "retry_at": null, "coverage_notes": ["Search indexing and deleted history may omit mentions."]},
+    {"source_id": "work-github", "name": "Work GitHub", "kind": "github", "status": "error", "last_success_at": "2026-11-09T11:00:14Z", "last_attempt_at": "2026-11-09T12:00:00Z", "error": "Could not finish reading pull request history.", "retry_at": null, "coverage_notes": ["Discovery is limited to accessible search results and retained history."]}
+  ],
+  "progress": [
+    {"source_id": "jira", "phase": "completed", "completed_items": 0, "total_items": 0, "started_at": "2026-11-09T12:00:00Z", "finished_at": "2026-11-09T12:00:14Z", "elapsed_ms": 14000},
+    {"source_id": "work-github", "phase": "failed", "completed_items": 3, "total_items": 12, "started_at": "2026-11-09T12:00:00Z", "finished_at": "2026-11-09T12:00:08Z", "elapsed_ms": 8000}
+  ]
+}

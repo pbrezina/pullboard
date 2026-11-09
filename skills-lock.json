@@ -1,17 +1,17 @@
 {
   "version": 1,
   "skills": {
-    "angular-developer": {
-      "source": "angular/skills",
+    "mdbook": {
+      "source": "marceloeatworld/mdbook-ai-skill",
       "sourceType": "github",
-      "skillPath": "angular-developer/SKILL.md",
-      "computedHash": "06f89c855e544fe306e8e08cae83a667e54fbb81509e8a1e631bff308f268cbd"
+      "skillPath": "SKILL.md",
+      "computedHash": "aa8c6fcb6b339656bb2b227ece054794f58649732fe8b4dd9b1bc0bdfef3d244"
     },
-    "angular-new-app": {
-      "source": "angular/skills",
+    "rust-skills": {
+      "source": "leonardomso/rust-skills",
       "sourceType": "github",
-      "skillPath": "angular-new-app/SKILL.md",
-      "computedHash": "49bd84ab08bd3498c52f476bed48fbb942dc6dbc0925607e84549adbed34bccf"
+      "skillPath": "SKILL.md",
+      "computedHash": "9719e9ebd94783d3436ed26156bf9bf2e4c7f63b3220d9d17ff90cba55c92bb8"
     }
   }
 }

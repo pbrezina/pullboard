@@ -1,0 +1,23 @@
+# Safe local startup: no upstreams, no credentials, no generated demonstration data.
+# Run from the repository root:
+#   backend/target/debug/pullboard --config config/pullboard.yaml
+# Paths are relative to the process working directory, not this YAML file.
+server:
+  bind: 127.0.0.1
+  port: 8080
+  allowed_origins: [http://localhost:8080, http://127.0.0.1:8080]
+  static_directory: frontend/dist/frontend/browser
+  database: pullboard-cache.sqlite
+read_only_test_mode: true
+refresh_interval_seconds: 3600
+# Default read limits; no environment overrides. See example.yaml for other bounds.
+upstream:
+  max_concurrent_requests: 4          # 1..16; shared across same-origin credentials/instances
+  max_concurrent_items: 4             # 1..32; per-source Jira/forge item hydration
+  github_batch_size: 5                # 1..10; effective min(this, max_concurrent_items)
+jira: null
+forges: []
+ai:
+  enabled: false
+  provider: openai
+  model: gpt-6-luna

@@ -1,0 +1,139 @@
+<form class="url-form" (submit)="resolve($event)" novalidate aria-label="Open upstream issue">
+  <label class="url-field"
+    >Issue URL
+    <input
+      #issueUrl
+      type="url"
+      [formField]="fields.url"
+      autocomplete="off"
+      spellcheck="false"
+      placeholder="https://forge.example/owner/repository/issues/7…"
+      aria-describedby="issue-url-help issue-url-error"
+    />
+  </label>
+  <label
+    >Lookup instance (optional)
+    <select autocomplete="off" [formField]="fields.source" aria-describedby="issue-url-help">
+      <option value="">Detect from URL</option>
+      @for (source of sources(); track source.id) {
+        <option [value]="source.id">{{ source.name }} ({{ source.id }})</option>
+      }
+    </select>
+  </label>
+  <button type="submit" [disabled]="resolving() || unavailableMode()">
+    {{ resolving() ? 'Resolving…' : 'Clone to Jira' }}
+  </button>
+  <p id="issue-url-help" class="muted url-help">
+    Configured forge instances only. Closed or unassigned issues are allowed. Opens an editable
+    copy; nothing is created until you submit.
+  </p>
+</form>
+<div id="issue-url-error" aria-live="polite">
+  @if (error()) {
+    <p class="error-banner" role="alert">{{ error() }}</p>
+  }
+</div>
+@if (resolving()) {
+  <p role="status" class="muted lookup-status">Reading the upstream issue…</p>
+}
+@if (warning(); as warning) {
+  <p class="warning-banner" role="status">{{ warning }}</p>
+}
+@if (store.board(); as board) {
+  @if (store.context(); as context) {
+    <app-filter-bar
+      [board]="board"
+      [context]="context"
+      [upstreamOnly]="true"
+      [filters]="filters()"
+      (filtersChange)="preferences.setFilters('upstream', $event)"
+    />
+  }
+  <div class="results-bar tabular-nums">
+    <p aria-live="polite">
+      Showing <strong>{{ issues().length }}</strong> of
+      <strong>{{ board.upstream_issues.length }}</strong> upstream issues
+      @if (issues().length < board.upstream_issues.length) {
+        <span class="hidden-warning">
+          / {{ board.upstream_issues.length - issues().length }} hidden by filters</span
+        >
+      }
+    </p>
+    <button class="text-button" (click)="preferences.reset('upstream')">Reset filters</button>
+  </div>
+  @if (!board.generated_at) {
+    <p class="info-banner">
+      Waiting for the first snapshot. Refresh to discover assigned issues, or open a
+      configured-instance issue URL above.
+    </p>
+  }
+  <section aria-labelledby="upstream-heading">
+    <h2 id="upstream-heading" class="list-heading">Assigned upstream issues</h2>
+    <ul class="issue-list">
+      @for (issue of issues(); track issue.id) {
+        <li class="upstream-row">
+          <article [attr.aria-label]="issue.title">
+            <div class="issue-content">
+              <div class="card-meta">
+                <span class="card-tag forge-tag">{{ issue.forge }}</span>
+                <span class="card-tag repository-tag" translate="no"
+                  >{{ issue.owner }}/{{ issue.repository }}</span
+                >
+                <span translate="no">{{ issue.source_id }} #{{ issue.number }}</span>
+                @if (stale(issue.source_id)) {
+                  <span class="source-warning">Stale snapshot; check source health.</span>
+                }
+              </div>
+              <h3 class="card-title">
+                <pb-link [url]="issue.url" [label]="issue.title">{{
+                  issue.title || 'Untitled issue'
+                }}</pb-link>
+              </h3>
+              <p class="issue-snippet">{{ issue.description || 'No description provided.' }}</p>
+              <div class="issue-details">
+                <span class="reporter"
+                  >Reporter:
+                  @if (issue.reporter; as reporter) {
+                    <pb-link [url]="reporter.url" [label]="reporter.display_name">{{
+                      reporter.username || reporter.display_name
+                    }}</pb-link>
+                  } @else {
+                    unavailable
+                  }
+                </span>
+                @for (label of issue.labels; track $index) {
+                  <span class="card-tag" [class.accepted]="label.toLowerCase() === 'accepted'">{{
+                    label
+                  }}</span>
+                }
+              </div>
+            </div>
+            <button
+              class="small-button"
+              [disabled]="unavailableMode()"
+              (click)="clone(issue)"
+              [attr.aria-label]="'Clone to Jira: ' + issue.title"
+            >
+              Clone to Jira
+            </button>
+          </article>
+        </li>
+      } @empty {
+        <li class="empty-list">
+          <h3>
+            {{
+              board.upstream_issues.length ? 'No matching issues' : 'No assigned upstream issues'
+            }}
+          </h3>
+          <p>
+            {{
+              board.upstream_issues.length
+                ? 'Change forge, repository or title filters to see more work.'
+                : 'Open issues assigned to you appear after refresh. Check source health, or open an issue URL above.'
+            }}
+          </p>
+        </li>
+      }
+    </ul>
+  </section>
+}

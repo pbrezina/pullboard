@@ -1,0 +1,21 @@
+{
+  "issue": {
+    "id": "work-forgejo:acme/widget:issue:11",
+    "source_id": "work-forgejo",
+    "forge": "forgejo",
+    "number": 11,
+    "owner": "acme",
+    "repository": "widget",
+    "title": "Preserve issue description newlines",
+    "url": "https://forge.example/acme/widget/issues/11",
+    "description": "Keep the first line.\nKeep the second line.",
+    "state": "closed",
+    "reporter": {"id": "mock-forgejo-reporter", "username": "sam", "display_name": "Sam", "url": null},
+    "assignees": [],
+    "labels": ["bug", "text"],
+    "is_assigned_to_me": false,
+    "created_at": "2026-11-01T10:00:00Z",
+    "updated_at": "2026-11-08T10:00:00Z"
+  },
+  "warning": "This upstream issue is closed. You can still create an editable Jira clone."
+}

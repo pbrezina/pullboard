@@ -1,0 +1,14 @@
+{
+  "upstream_issue_id": "work-forgejo:acme/widget:issue:11",
+  "expected_mode_revision": "mode_mock_boot_a_test_1",
+  "purpose": "implementation",
+  "project_key": "IDM",
+  "issue_type": "Task",
+  "title": "Preserve issue description newlines",
+  "description": "Keep the first line.\nKeep the second line.\n\nUpstream issue: https://forge.example/acme/widget/issues/11\nLabels: bug, text",
+  "story_points": null,
+  "assignee_id": null,
+  "sprint_id": null,
+  "team": null,
+  "status": null
+}

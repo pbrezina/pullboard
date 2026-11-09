@@ -1,0 +1,67 @@
+<section class="filter-grid" [class.upstream-filters]="upstreamOnly()" aria-label="Board filters">
+  @if (!upstreamOnly()) {
+    <div class="filter-pair">
+      <label
+        >Sprint<select [formField]="fields.sprint">
+          <option value="" disabled>
+            {{
+              context().current_sprints.length > 1
+                ? 'Multiple current sprints — choose a sprint'
+                : 'No current sprint — choose a sprint'
+            }}
+          </option>
+          @if (sprintMissing()) {
+            <option [value]="filters().sprint">Unavailable sprint: {{ filters().sprint }}</option>
+          }
+          <option value="all">All sprints & no sprint</option>
+          @for (group of sprintGroups(); track group.label) {
+            <optgroup [label]="group.label">
+              @for (sprint of group.sprints; track sprint.id) {
+                <option [value]="sprint.id">{{ sprint.name }}</option>
+              }
+            </optgroup>
+          }
+          <option value="none">No sprint</option>
+        </select></label
+      ><label
+        >Jira title<input
+          type="search"
+          [formField]="fields.jiraTitle"
+          placeholder="Filter Jira titles…"
+          autocomplete="off"
+      /></label>
+    </div>
+  }
+  <div class="filter-pair pr-filter-pair">
+    <label
+      >Forge instance<select [formField]="fields.source" (change)="selectSource($event)">
+        <option value="all">All forges</option>
+        @if (sourceMissing()) {
+          <option [value]="filters().source">Unavailable forge: {{ filters().source }}</option>
+        }
+        @for (source of sources(); track source.id) {
+          <option [value]="source.id">{{ source.label }}</option>
+        }
+      </select></label
+    ><label
+      >Repository<select [formField]="fields.repository" (change)="selectRepository($event)">
+        <option value="all">All repositories</option>
+        @if (repositoryMissing()) {
+          <option [value]="filters().repository">
+            Unavailable repository: {{ filters().repository }}
+          </option>
+        }
+        @for (repository of repositories(); track repository.id) {
+          <option [value]="repository.id">{{ repository.label }}</option>
+        }
+      </select></label
+    ><label
+      >{{ upstreamOnly() ? 'Issue title' : 'PR title'
+      }}<input
+        type="search"
+        [formField]="fields.prTitle"
+        [placeholder]="upstreamOnly() ? 'Filter issue titles…' : 'Filter PR titles…'"
+        autocomplete="off"
+    /></label>
+  </div>
+</section>

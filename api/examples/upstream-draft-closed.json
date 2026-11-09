@@ -1,0 +1,16 @@
+{
+  "upstream_issue_id": "work-forgejo:acme/widget:issue:11",
+  "purpose": "implementation",
+  "project_key": "IDM",
+  "title": "Preserve issue description newlines",
+  "description": "Keep the first line.\nKeep the second line.\n\nUpstream issue: https://forge.example/acme/widget/issues/11\nLabels: bug, text",
+  "story_points": null,
+  "assignee_id": null,
+  "sprint_id": null,
+  "issue_type": "Task",
+  "team": null,
+  "suggested_status": null,
+  "generated_by": "template",
+  "warning": "This upstream issue is closed. You can still create an editable Jira clone.",
+  "diagnostics": []
+}

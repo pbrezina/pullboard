@@ -1,0 +1,14 @@
+{
+  "state": "idle",
+  "started_at": null,
+  "finished_at": null,
+  "last_success_at": null,
+  "sources": [
+    {"source_id": "jira", "name": "Work Jira", "kind": "jira", "status": "pending", "last_success_at": null, "last_attempt_at": null, "error": null, "retry_at": null, "coverage_notes": []},
+    {"source_id": "work-github", "name": "Work GitHub", "kind": "github", "status": "pending", "last_success_at": null, "last_attempt_at": null, "error": null, "retry_at": null, "coverage_notes": []}
+  ],
+  "progress": [
+    {"source_id": "jira", "phase": "idle", "completed_items": 0, "total_items": null, "started_at": null, "finished_at": null, "elapsed_ms": 0},
+    {"source_id": "work-github", "phase": "idle", "completed_items": 0, "total_items": null, "started_at": null, "finished_at": null, "elapsed_ms": 0}
+  ]
+}

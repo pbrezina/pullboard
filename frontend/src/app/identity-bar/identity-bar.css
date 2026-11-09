@@ -1,0 +1,8 @@
+.current-project {
+  margin-bottom: 0.65rem;
+  font-size: 12px;
+}
+.current-project .strip-label {
+  display: inline;
+  margin-right: 0.6rem;
+}

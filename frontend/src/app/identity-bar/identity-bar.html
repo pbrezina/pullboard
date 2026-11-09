@@ -1,0 +1,58 @@
+<section class="identity-strip" aria-label="Who am I">
+  <div class="identity-group min-w-0">
+    <span class="strip-label">Connected as</span>
+    <div class="identity-list">
+      @for (identity of context().identities; track identity.source_id) {
+        <div class="identity" [title]="identity.display_name + ' · ' + identity.kind">
+          <span class="source-mark" aria-hidden="true">{{
+            identity.kind === 'jira'
+              ? 'J'
+              : identity.kind === 'gitlab'
+                ? 'GL'
+                : identity.kind === 'github'
+                  ? 'GH'
+                  : 'G'
+          }}</span>
+          <span class="min-w-0 break-words"
+            ><strong translate="no">{{ identity.source_id }}</strong
+            ><pb-link [url]="identity.profile_url" [label]="identity.display_name">{{
+              identity.username || identity.display_name
+            }}</pb-link></span
+          >
+        </div>
+      } @empty {
+        <span class="muted"
+          >No verified identities yet. Check source health for discovery status.</span
+        >
+      }
+    </div>
+  </div>
+  <div class="sprint-group">
+    <div class="current-project">
+      <span class="strip-label">Current project</span>
+      @if (context().current_project; as project) {
+        <strong translate="no">{{ project.key }}</strong> / {{ project.name }}
+      } @else {
+        <span class="muted">Not available yet</span>
+      }
+    </div>
+    <span class="strip-label">Current active sprints</span>
+    @if (sprints().length > 1) {
+      <span class="muted">Multiple matching active sprints; choose a sprint explicitly.</span>
+    }
+    <div class="sprint-list">
+      @for (sprint of sprints(); track sprint.id) {
+        <div class="min-w-0 break-words">
+          <pb-link [url]="sprintUrl(sprint)" [label]="sprint.name">{{ sprint.name }}</pb-link>
+          @if (endDate(sprint.end_at); as date) {
+            <span class="muted"> · Ends {{ date }}</span>
+          }
+        </div>
+      } @empty {
+        <span class="muted"
+          >No matching active sprint. Choose a sprint in filters to view assigned tickets.</span
+        >
+      }
+    </div>
+  </div>
+</section>

@@ -1,0 +1,270 @@
+<div class="dialog-shell ticket-dialog">
+  <header class="dialog-header">
+    <div>
+      <h2 id="ticket-heading">
+        {{ data.purpose === 'review' ? 'Create review ticket' : 'Create Jira ticket' }}
+      </h2>
+      <p>
+        From
+        <pb-link [url]="source.url" [label]="source.title"
+          >{{ source.repository }} #{{ source.number }}</pb-link
+        >
+      </p>
+    </div>
+    <button
+      class="icon-button"
+      aria-label="Close ticket dialog"
+      [disabled]="busy()"
+      (click)="cancel()"
+    >
+      ×
+    </button>
+  </header>
+  @if (data.kind === 'upstream') {
+    @if (warning(); as warning) {
+      <p class="warning-banner" role="status">{{ warning }}</p>
+    }
+  }
+  @if (loading()) {
+    <div class="dialog-loading" role="status">Preparing an editable draft…</div>
+  }
+  @if (error()) {
+    <p class="error-banner" role="alert">
+      {{ error() }}
+      @if (!draft()) {
+        <button class="text-button" (click)="generate()">Retry draft</button>
+      }
+    </p>
+  }
+  @if (draft(); as draft) {
+    <form class="ticket-form" (submit)="save($event)" novalidate>
+      <div class="dialog-body">
+        <div class="draft-provenance">
+          <span class="chip">{{
+            data.kind === 'upstream'
+              ? 'Deterministic copy · no AI'
+              : draft.generated_by === 'ai'
+                ? 'AI-generated draft'
+                : 'Template draft'
+          }}</span
+          ><span>Review and edit before creating. Nothing has been written to Jira.</span>
+        </div>
+        @if (data.kind === 'pr' && draft.warning) {
+          <p class="warning-banner">{{ draft.warning }}</p>
+        }
+        <div aria-live="polite">
+          @for (diagnostic of diagnostics(); track diagnostic.code + ':' + diagnostic.field) {
+            <p class="warning-banner">{{ diagnostic.message }}</p>
+          }
+          @for (warning of choiceWarnings(); track warning) {
+            <p class="warning-banner">{{ warning }}</p>
+          }
+          @if (outcomeUnknown()) {
+            <p class="error-banner">
+              Creation may have succeeded. Check Jira before any further action; creation is
+              disabled here to avoid a duplicate.
+            </p>
+          }
+        </div>
+        @if (review.stale()) {
+          <div class="warning-banner" role="status">
+            Runtime mode changed or cannot be verified. Your edits are preserved; nothing is
+            retried. Review the current mode before submitting again.
+            <button type="button" (click)="review.review()" [disabled]="busy() || outcomeUnknown()">
+              Review current mode
+            </button>
+          </div>
+        }
+        @if (review.captured().read_only_test_mode) {
+          <p class="simulation-banner">
+            Read-only test mode. Creation will be simulated, without a Jira ticket or link.
+          </p>
+        } @else {
+          <p class="warning-banner">
+            Live action: creation writes to Jira. Once admitted, it may finish even after switching
+            to Test.
+          </p>
+        }
+        <div class="form-grid">
+          <label
+            >Project<select
+              id="ticket-project"
+              [formField]="fields.project"
+              (change)="projectChanged($event)"
+            >
+              @for (project of store.context()?.jira_projects; track project.key) {
+                <option [value]="project.key">{{ project.key }} / {{ project.name }}</option>
+              }
+            </select></label
+          ><label
+            >Issue type<select
+              id="ticket-type"
+              [formField]="fields.issueType"
+              (change)="typeChanged($event)"
+            >
+              <option value="">Select issue type</option>
+              @for (type of options()?.issue_types || []; track type) {
+                <option [value]="type">{{ type }}</option>
+              }
+            </select>
+            @if (fields.issueType().touched() && fields.issueType().invalid()) {
+              <span class="error-text" role="status">Select a supported issue type.</span>
+            }
+          </label>
+        </div>
+        @if (optionsError()) {
+          <p class="error-banner" role="alert">
+            {{ optionsError() }}
+            <button type="button" class="text-button" (click)="loadOptions()">Retry options</button>
+          </p>
+        }
+        @if (staleChoices()) {
+          <p class="muted" role="status">
+            Using cached Jira choices; the last refresh failed. Your edits are preserved.
+            <button
+              type="button"
+              class="text-button"
+              (click)="refreshChoices()"
+              [disabled]="store.refreshing() || store.sync()?.state === 'syncing'"
+            >
+              Refresh Jira choices
+            </button>
+          </p>
+        }
+        <label>Title<input [formField]="fields.title" autocomplete="off" /></label>
+        @if (fields.title().touched() && fields.title().invalid()) {
+          <p class="error-text" role="alert">Enter a title of 1–255 characters.</p>
+        }
+        <label
+          >Description<textarea
+            rows="7"
+            [formField]="fields.description"
+            autocomplete="off"
+          ></textarea>
+        </label>
+        @if (fields.description().invalid()) {
+          <p class="error-text">Description must be at most 100,000 characters.</p>
+        }
+        <div class="form-grid">
+          <label
+            >Story points
+            <span class="muted"
+              >({{
+                options()?.capabilities?.story_points?.required ? 'required' : 'optional'
+              }})</span
+            ><input
+              type="text"
+              inputmode="decimal"
+              [formField]="fields.points"
+              aria-describedby="points-help"
+              [attr.aria-invalid]="!!fieldErrors().points || fields.points().invalid()"
+              placeholder="e.g. 2…"
+              autocomplete="off"
+            />
+            @if (fields.points().invalid()) {
+              <span class="error-text">Use a non-negative number or leave blank.</span>
+            }
+            @if (fieldErrors().points; as message) {
+              <span class="error-text" role="status">{{ message }}</span>
+            }
+            <span id="points-help" class="muted">{{
+              capabilityHelp('Story points', options()?.capabilities?.story_points)
+            }}</span></label
+          ><label
+            >Sprint<select
+              id="ticket-sprint"
+              [formField]="fields.sprint"
+              aria-describedby="sprint-help"
+              [attr.aria-invalid]="!!fieldErrors().sprint"
+            >
+              <option value="">No sprint</option>
+              @for (group of sprintGroups(); track group.label) {
+                <optgroup [label]="group.label">
+                  @for (sprint of group.sprints; track sprint.id) {
+                    <option [value]="sprint.id">{{ sprint.name }}</option>
+                  }
+                </optgroup>
+              }</select
+            ><span id="sprint-help" class="muted">{{
+              capabilityHelp('Sprint', options()?.capabilities?.sprint)
+            }}</span>
+            @if (fieldErrors().sprint; as message) {
+              <span class="error-text" role="status">{{ message }}</span>
+            }
+          </label>
+        </div>
+        <app-assignee-picker
+          [formField]="fields.assignee"
+          [people]="assignees()"
+          [error]="fieldErrors().assignee || ''"
+        />
+        <div class="form-grid">
+          <label
+            >Team
+            <span class="muted"
+              >({{ options()?.capabilities?.team?.required ? 'required' : 'optional' }})</span
+            ><select
+              id="ticket-team"
+              [formField]="fields.team"
+              aria-describedby="team-help"
+              [attr.aria-invalid]="!!fieldErrors().team"
+            >
+              <option value="">No team</option>
+              @for (team of options()?.teams || []; track team.id) {
+                <option [value]="team.id">{{ team.name }}</option>
+              }</select
+            ><span id="team-help" class="muted">{{
+              capabilityHelp('Team', options()?.capabilities?.team)
+            }}</span>
+            @if (fieldErrors().team; as message) {
+              <span class="error-text" role="status">{{ message }}</span>
+            }</label
+          ><label
+            >Workflow status <span class="muted">(optional)</span
+            ><select
+              id="ticket-status"
+              [formField]="fields.status"
+              aria-describedby="status-help"
+              [attr.aria-invalid]="!!fieldErrors().status"
+            >
+              <option value="">Jira default — no transition</option>
+              @for (status of statusChoices(); track status.id) {
+                <option [value]="status.name" [disabled]="status.ambiguous">
+                  {{ status.name }}{{ status.ambiguous ? ' (ambiguous name)' : '' }}
+                </option>
+              }
+            </select>
+            @if (fieldErrors().status; as message) {
+              <span class="error-text" role="status">{{ message }}</span>
+            }
+            @if (ambiguousStatuses()) {
+              <span class="muted"
+                >Duplicate status names cannot be selected. Choose a unique name or Jira
+                default.</span
+              >
+            }
+          </label>
+        </div>
+        <p class="muted form-note" id="status-help">
+          Only an explicitly selected status is requested after creation. If a direct transition
+          fails, the ticket stays created with a warning; do not create it again.
+        </p>
+        @if (optionsLoading() && !options()) {
+          <p role="status" class="muted">Loading Jira options…</p>
+        }
+      </div>
+      <footer class="dialog-footer">
+        <button type="button" [disabled]="busy()" (click)="cancel()">Cancel</button
+        ><button class="primary-button" type="submit" [disabled]="createBlocked()">
+          {{
+            busy()
+              ? 'Creating…'
+              : review.captured().read_only_test_mode
+                ? 'Simulate creation'
+                : 'Create Jira ticket'
+          }}
+        </button>
+      </footer>
+    </form>
+  }
+</div>

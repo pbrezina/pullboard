@@ -1,0 +1,19 @@
+.issue-type {
+  --type-color: light-dark(#215e9e, #8ecbff);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  color: var(--type-color);
+  background: color-mix(in srgb, var(--type-color) 10%, var(--surface));
+}
+[data-issue-kind='bug'] .issue-type {
+  --type-color: var(--error);
+}
+[data-issue-kind='story'] .issue-type {
+  --type-color: var(--accent);
+}
+[data-issue-kind='epic'] .issue-type {
+  --type-color: var(--warning);
+}

@@ -1,0 +1,140 @@
+# PullBoard configuration reference. COPY to config/local.yaml, replace placeholders,
+# and run with --config config/local.yaml. Never commit real credentials.
+# All application settings live in THIS ONE YAML file. Unknown fields are rejected.
+# No environment expansion, environment credential sources or secret-file fallbacks.
+# Paths are relative to the server's working directory.
+server:
+  bind: 127.0.0.1                   # container ONLY: 0.0.0.0, publish 127.0.0.1:8080:8080
+  port: 8080
+  allowed_origins:                  # exact browser origins; no trailing slash
+    - http://localhost:8080
+    - http://127.0.0.1:8080
+  static_directory: frontend/dist/frontend/browser
+  database: pullboard-cache.sqlite  # ephemeral SQLite snapshot, no migrations
+
+# True validates explicit actions but skips ALL Jira create/sprint/link/transition writes.
+# Simulations return success with outcome=simulated, issue=null, no synthetic IDs.
+read_only_test_mode: true
+refresh_interval_seconds: 3600
+upstream:
+  timeout_seconds: 30               # total per-request timeout; allowed 1..120
+  max_pages: 100                    # 1..1000; bounds fail closed, keep verified same-scope data
+  page_size: 100                    # 1..100
+  max_response_bytes: 8388608       # 8 MiB per upstream response; maximum 32 MiB
+  # Positive YAML integers (usize); shared origin = scheme/host/effective port.
+  # Same-origin instances/credentials share HTTP concurrency and conservative backoff.
+  max_concurrent_requests: 4        # 1..16; Jira/forge HTTP requests per origin, not per source
+  max_concurrent_items: 4           # 1..32; active item hydration per Jira/forge source
+  github_batch_size: 5              # 1..10; effective min(this, max_concurrent_items)
+  # Active GitHub batches <= floor(items/effective batch); defaults mean size 4.
+  # Cursor-dependent pages stay sequential. These limits cannot prevent all throttling.
+
+# Optional. Use jira: null (and forges: []) for a genuine empty local instance.
+jira:
+  base_url: https://example.atlassian.net
+  email: developer@example.invalid
+  # Exactly one: {value: literal} OR {keyring: {service: ..., account: ...}}.
+  token:
+    keyring: {service: pullboard, account: work-jira}
+  # Sanitized policy examples, NOT verified tenant names/IDs. Replace for your site.
+  # Identity, project names/types, fields and options are discovered, never configured.
+  # Projects restrict assigned-issue discovery, metadata and ticket creation only.
+  # Mention candidates are server-filtered across ALL accessible projects, regardless
+  # of assignee; a search match alone does not imply unanswered attention.
+  # Both searches consider every status except Closed open; resolution and the Done
+  # status category do not exclude issues. No additional configuration keys are needed.
+  projects: [DEV]                    # YAML order; first configured project supplies header
+  board_id: 42                       # required positive ID; only this board is queried
+  team: Example Platform             # required semantic default, NOT sprint ownership
+  sprint_name_pattern: '%YEAR-EXAMPLE-S%NUMBER' # required, full-name match for defaults only
+  # Optional exact semantic field name; absent means AssignedTeam. No raw field IDs.
+  # team_field_name: AssignedTeam
+  # Multiple group names form a union, deduplicated then individually checked for
+  # project assignability. Absent/[] enumerates all users and checks each candidate;
+  # this needs broader directory permissions and can cost many requests at refresh.
+  # Complete choices/policy publish with Jira cards; dialogs/search/submit use that cache.
+  # Failed refresh retains same-scope last-good choices as stale; policy changes wait
+  # for the next successful refresh. No incomplete/unrestricted fallback.
+  assignee_groups: [example-engineering, example-reviewers]
+  defaults:                          # optional; these are also the built-in policies
+    implementation: {issue_type: Task, assignee: null}
+    review: {issue_type: Task, assignee: null} # self excluded from review choices
+  # Legacy implementation assignee: me is accepted but never preselects self.
+  # All new tickets start Unassigned / No sprint / Jira default (no transition).
+  # Optional policy-only overrides; keys must be selected above. No metadata here.
+  project_overrides:
+    DEV:
+      defaults:
+        review:
+          issue_type: Task
+          assignee: null
+          workflow: {draft: null, ready: Review} # metadata suggestions, NOT selected status
+  # Status choices come from the selected project/type; only explicit submit can
+  # request one direct post-create transition. Sync never writes.
+
+# Forge identities come from authenticated /user; no configured username/account.
+# No repository lists required: discover account-relevant PRs, including private
+# repos permitted by each token. Globs filter AFTER discovery. IDs must be unique.
+# Use read-only scopes. Never configure an API URL containing a credential.
+forges:
+  - id: personal-github
+    # name is optional; omitted display label defaults to the stable id.
+    kind: github
+    base_url: https://api.github.com  # GitHub API base, NOT https://github.com
+    token: {keyring: {service: pullboard, account: personal-github}}
+    include_repositories: []         # empty = all discovered; e.g. ['example-org/*']
+    exclude_repositories: ['example-org/archived-*']
+    default_project: DEV
+  - id: work-gitlab
+    name: Work GitLab
+    kind: gitlab
+    base_url: https://gitlab.example.invalid
+    token: {keyring: {service: pullboard, account: work-gitlab}}
+    include_repositories: []
+    exclude_repositories: []
+    default_project: DEV
+  - id: community-gitlab
+    name: Community GitLab
+    kind: gitlab
+    base_url: https://gitlab.com
+    token: {value: REPLACE-WITH-READ-API-TOKEN}
+    default_project: DEV
+  - id: personal-codeberg
+    name: Codeberg
+    kind: codeberg
+    base_url: https://codeberg.org
+    token: {keyring: {service: pullboard, account: personal-codeberg}}
+    default_project: DEV
+  - id: selfhosted-forgejo
+    name: Forgejo
+    kind: forgejo
+    base_url: https://forgejo.example.invalid
+    token: {value: REPLACE-WITH-READ-ONLY-TOKEN}
+    default_project: DEV
+
+# AI receives only the selected PR, never credentials or the board. PR data is
+# untrusted; no AI tools are exposed. Failed requests yield editable templates.
+# A provider's model ID is passed unchanged, with NO silent model substitution.
+ai:
+  enabled: false
+  provider: openai                  # openai | anthropic | ollama
+  model: gpt-6-luna                 # exact default, including when unavailable upstream
+  base_url: https://api.openai.com/v1
+  token: {keyring: {service: pullboard, account: openai}}
+  # Anthropic: provider: anthropic, model: <your exact model>,
+  #            base_url: https://api.anthropic.com/v1, token: {value: ...}
+  # Ollama: provider: ollama, model: <installed model>,
+  #         base_url: http://127.0.0.1:11434, token: null
+
+# Native keyring: Windows Credential Manager / macOS Keychain / Linux Secret
+# Service (Rust cryptography). Keyring lookup failures are explicit; no plaintext
+# fallback. --check-config checks configured credential availability, not API access.
+#
+# Linux containers: OPT-IN restricted Secret Service bridge only. See
+# docs/src/keyring-container.md for host xdg-dbus-proxy limited to
+# org.freedesktop.secrets and a dedicated socket directory. Mount only that
+# restricted socket, never the full
+# session bus or runtime directory. DBUS_SESSION_BUS_ADDRESS may select the bridge
+# socket: this is OS transport plumbing, NOT an application credential source.
+# Host keyring must be unlocked and service/account match exactly. Do not expose the
+# full session, automatically inject secrets, or fall back to plaintext on failure.

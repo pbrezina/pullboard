@@ -1,0 +1,22 @@
+# Container-only bind. Publish ONLY on the host loopback interface:
+#   -p 127.0.0.1:8080:8080
+# No automatic credential environment variables or full desktop session mounts.
+server:
+  bind: 0.0.0.0
+  port: 8080
+  allowed_origins: [http://localhost:8080, http://127.0.0.1:8080]
+  static_directory: /app/frontend
+  database: /data/pullboard-cache.sqlite
+read_only_test_mode: true
+refresh_interval_seconds: 3600
+# Default read limits; no environment overrides. See example.yaml for other bounds.
+upstream:
+  max_concurrent_requests: 4          # 1..16; shared across same-origin credentials/instances
+  max_concurrent_items: 4             # 1..32; per-source Jira/forge item hydration
+  github_batch_size: 5                # 1..10; effective min(this, max_concurrent_items)
+jira: null
+forges: []
+ai:
+  enabled: false
+  provider: openai
+  model: gpt-6-luna

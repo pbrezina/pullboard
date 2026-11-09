@@ -1,0 +1,14 @@
+{
+  "state": "idle",
+  "started_at": "2026-11-09T12:01:00Z",
+  "finished_at": "2026-11-09T12:01:04Z",
+  "last_success_at": "2026-11-09T11:00:14Z",
+  "sources": [
+    {"source_id": "jira", "name": "Work Jira", "kind": "jira", "status": "ok", "last_success_at": "2026-11-09T12:01:04Z", "last_attempt_at": "2026-11-09T12:01:00Z", "error": null, "retry_at": null, "coverage_notes": []},
+    {"source_id": "work-github", "name": "Work GitHub", "kind": "github", "status": "backoff", "last_success_at": "2026-11-09T11:00:14Z", "last_attempt_at": "2026-11-09T12:00:00Z", "error": "Upstream rate limit; retry after the indicated time.", "retry_at": "2026-11-09T12:10:00Z", "coverage_notes": ["Discovery is limited to accessible search results and retained history."]}
+  ],
+  "progress": [
+    {"source_id": "jira", "phase": "completed", "completed_items": 4, "total_items": 4, "started_at": "2026-11-09T12:01:00Z", "finished_at": "2026-11-09T12:01:04Z", "elapsed_ms": 4000},
+    {"source_id": "work-github", "phase": "backoff", "completed_items": 0, "total_items": null, "started_at": null, "finished_at": null, "elapsed_ms": 0}
+  ]
+}

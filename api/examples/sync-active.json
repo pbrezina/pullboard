@@ -1,0 +1,20 @@
+{
+  "state": "syncing",
+  "started_at": "2026-11-09T12:00:00Z",
+  "finished_at": null,
+  "last_success_at": "2026-11-09T11:00:14Z",
+  "sources": [
+    {"source_id": "jira", "name": "Work Jira", "kind": "jira", "status": "ok", "last_success_at": "2026-11-09T11:00:14Z", "last_attempt_at": "2026-11-09T12:00:00Z", "error": null, "retry_at": null, "coverage_notes": ["Search indexing and deleted history may omit mentions."]},
+    {"source_id": "work-github", "name": "Work GitHub", "kind": "github", "status": "ok", "last_success_at": "2026-11-09T11:00:14Z", "last_attempt_at": "2026-11-09T12:00:05Z", "error": null, "retry_at": null, "coverage_notes": ["Discovery is limited to accessible search results and retained history."]},
+    {"source_id": "work-gitlab", "name": "Work GitLab", "kind": "gitlab", "status": "pending", "last_success_at": null, "last_attempt_at": "2026-11-09T12:00:12Z", "error": null, "retry_at": null, "coverage_notes": []},
+    {"source_id": "work-codeberg", "name": "Work Codeberg", "kind": "codeberg", "status": "pending", "last_success_at": null, "last_attempt_at": "2026-11-09T12:00:10Z", "error": null, "retry_at": null, "coverage_notes": []},
+    {"source_id": "work-forgejo", "name": "Work Forgejo", "kind": "forgejo", "status": "pending", "last_success_at": null, "last_attempt_at": null, "error": null, "retry_at": null, "coverage_notes": []}
+  ],
+  "progress": [
+    {"source_id": "jira", "phase": "publishing", "completed_items": 25, "total_items": 25, "started_at": "2026-11-09T12:00:00Z", "finished_at": null, "elapsed_ms": 13000},
+    {"source_id": "work-github", "phase": "fetching", "completed_items": 7, "total_items": null, "started_at": "2026-11-09T12:00:05Z", "finished_at": null, "elapsed_ms": 8000},
+    {"source_id": "work-gitlab", "phase": "preparing", "completed_items": 0, "total_items": null, "started_at": "2026-11-09T12:00:12Z", "finished_at": null, "elapsed_ms": 1000},
+    {"source_id": "work-codeberg", "phase": "discovering", "completed_items": 0, "total_items": null, "started_at": "2026-11-09T12:00:10Z", "finished_at": null, "elapsed_ms": 3000},
+    {"source_id": "work-forgejo", "phase": "queued", "completed_items": 0, "total_items": null, "started_at": null, "finished_at": null, "elapsed_ms": 0}
+  ]
+}

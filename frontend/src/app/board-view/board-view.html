@@ -1,0 +1,221 @@
+<div class="view-heading">
+  <div class="view-switch" role="group" aria-label="Board view">
+    <button
+      [class.selected]="tab() === 'attention'"
+      [attr.aria-pressed]="tab() === 'attention'"
+      (click)="preferences.setTab('attention')"
+    >
+      Needs Attention <span class="count-badge">{{ unfilteredAttention() }}</span></button
+    ><button
+      [class.selected]="tab() === 'overview'"
+      [attr.aria-pressed]="tab() === 'overview'"
+      (click)="preferences.setTab('overview')"
+    >
+      Upstream Pull Requests
+    </button>
+    <button
+      [class.selected]="tab() === 'upstream'"
+      [attr.aria-pressed]="tab() === 'upstream'"
+      (click)="preferences.setTab('upstream')"
+    >
+      Upstream issues
+    </button>
+  </div>
+  <span class="view-description">{{
+    tab() === 'attention'
+      ? 'Oldest unanswered first'
+      : tab() === 'upstream'
+        ? 'Assigned upstream issues, A–Z'
+        : 'Your assigned tickets & open PRs, A–Z'
+  }}</span>
+</div>
+@if (store.board(); as board) {
+  @if (tab() === 'upstream') {
+    <app-upstream-issues />
+  } @else {
+    @if (store.context(); as context) {
+      <app-filter-bar
+        [board]="board"
+        [context]="context"
+        [filters]="filters()"
+        (filtersChange)="changeFilters($event)"
+      />
+    }
+    @if (data(); as data) {
+      <div class="results-bar tabular-nums">
+        <p aria-live="polite">
+          Showing <strong>{{ data.shown }}</strong> of <strong>{{ data.total }}</strong>
+          {{ tab() === 'attention' ? 'items requiring attention' : 'work items' }}
+          @if (data.shown < data.total) {
+            <span class="hidden-warning"> / {{ data.total - data.shown }} hidden by filters</span>
+          }
+        </p>
+        <div>
+          <button class="text-button" (click)="preferences.reset(tab())">Reset filters</button
+          ><button class="text-button" (click)="showEverything()">Show all work</button>
+        </div>
+      </div>
+      @if (!board.generated_at) {
+        <p class="info-banner">
+          Waiting for the first snapshot. Refresh to discover your work. Source health explains any
+          unavailable sources.
+        </p>
+      }
+      <div class="board-columns" [class.overview]="tab() === 'overview'" cdkDropListGroup>
+        <section class="queue" aria-labelledby="jira-heading">
+          <header class="queue-heading">
+            <div>
+              <span class="queue-symbol jira-symbol" aria-hidden="true">J</span>
+              <h2 id="jira-heading">
+                {{ tab() === 'attention' ? 'Jira mentions' : 'Assigned to you' }}
+              </h2>
+            </div>
+            <span>{{ data.issues.length }} of {{ data.jira.length }}</span>
+          </header>
+          <div class="queue-content">
+            @if (tab() === 'overview' && !filters().sprint) {
+              <p class="info-banner">
+                {{
+                  store.context()?.current_sprints?.length
+                    ? 'Multiple matching active sprints. Choose a sprint to view assigned tickets.'
+                    : 'No matching active sprint. Choose a sprint to view assigned tickets.'
+                }}
+              </p>
+            }
+            @for (issue of data.issues; track issue.id) {
+              <app-issue-card
+                [issue]="issue"
+                [attentionMode]="tab() === 'attention'"
+                (linkRequested)="linkIssue($event)"
+              />
+            } @empty {
+              <div class="empty-queue">
+                <span aria-hidden="true">✓</span>
+                <h3>
+                  {{
+                    data.jira.length
+                      ? 'No matching tickets'
+                      : tab() === 'attention'
+                        ? 'No unanswered mentions'
+                        : 'No assigned tickets'
+                  }}
+                </h3>
+                <p>
+                  {{
+                    data.jira.length
+                      ? 'Change sprint or title filters to see more work.'
+                      : 'Items appear after source discovery. Check source health for coverage.'
+                  }}
+                </p>
+              </div>
+            }
+          </div>
+        </section>
+        @if (tab() === 'attention') {
+          <section class="queue" aria-labelledby="reviews-heading">
+            <header class="queue-heading">
+              <div>
+                <span class="queue-symbol" aria-hidden="true">↳</span>
+                <h2 id="reviews-heading">Reviews & mentions</h2>
+              </div>
+              <span>{{ data.reviews.length }} of {{ reviewTotal() }}</span>
+            </header>
+            <div
+              class="queue-content"
+              cdkDropList
+              [cdkDropListSortingDisabled]="true"
+              [cdkDropListEnterPredicate]="noEnter"
+              [cdkDropListData]="data.reviews"
+            >
+              @for (pr of data.reviews; track pr.id) {
+                <app-pr-card
+                  [pr]="pr"
+                  [attentionMode]="true"
+                  (createRequested)="ticket($event.pr, $event.purpose)"
+                  (linkRequested)="linkPr($event)"
+                />
+              } @empty {
+                <div class="empty-queue">
+                  <span aria-hidden="true">✓</span>
+                  <h3>{{ reviewTotal() ? 'No matching PRs' : 'No reviews waiting' }}</h3>
+                  <p>
+                    {{
+                      reviewTotal()
+                        ? 'Change forge or title filters to see more work.'
+                        : 'Review requests and mentions in others’ PRs appear here.'
+                    }}
+                  </p>
+                </div>
+              }
+            </div>
+          </section>
+        }
+        <section class="queue" aria-labelledby="own-heading">
+          <header class="queue-heading">
+            <div>
+              <span class="queue-symbol own-symbol" aria-hidden="true">⑂</span>
+              <h2 id="own-heading">
+                {{ tab() === 'attention' ? 'Your PR feedback' : 'Your open PRs' }}
+              </h2>
+            </div>
+            <span>{{ data.own.length }} of {{ ownTotal() }}</span>
+          </header>
+          <div
+            class="queue-content"
+            cdkDropList
+            [cdkDropListSortingDisabled]="true"
+            [cdkDropListEnterPredicate]="noEnter"
+            [cdkDropListData]="data.own"
+          >
+            @for (pr of data.own; track pr.id) {
+              <app-pr-card
+                [pr]="pr"
+                [attentionMode]="tab() === 'attention'"
+                (createRequested)="ticket($event.pr, $event.purpose)"
+                (linkRequested)="linkPr($event)"
+              />
+            } @empty {
+              <div class="empty-queue">
+                <span aria-hidden="true">✓</span>
+                <h3>
+                  {{
+                    ownTotal()
+                      ? 'No matching PRs'
+                      : tab() === 'attention'
+                        ? 'No feedback waiting'
+                        : 'No open PRs'
+                  }}
+                </h3>
+                <p>
+                  {{
+                    ownTotal()
+                      ? 'Change forge or title filters to see more work.'
+                      : 'Your work appears here after the configured forge instances sync.'
+                  }}
+                </p>
+              </div>
+            }
+          </div>
+        </section>
+      </div>
+      <p class="board-footnote">
+        Attention clears only with an upstream reply, review or resolution. Pushing a commit does
+        not clear a discussion. Drag a PR onto Jira to link, or choose <strong>Link PR</strong>.
+      </p>
+    }
+  }
+} @else {
+  <section class="initial-state" role="status">
+    <h2>{{ store.loading() ? 'Gathering your work…' : 'Your board is not available yet' }}</h2>
+    <p>
+      {{
+        store.loading()
+          ? 'Loading identities, sources and the latest cached snapshot.'
+          : 'Check the local server connection and retry.'
+      }}
+    </p>
+    @if (!store.loading()) {
+      <button (click)="store.reload()">Retry loading</button>
+    }
+  </section>
+}

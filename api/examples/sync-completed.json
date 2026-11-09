@@ -1,0 +1,20 @@
+{
+  "state": "idle",
+  "started_at": "2026-11-09T12:00:00Z",
+  "finished_at": "2026-11-09T12:00:14Z",
+  "last_success_at": "2026-11-09T12:00:14Z",
+  "sources": [
+    {"source_id": "jira", "name": "Work Jira", "kind": "jira", "status": "ok", "last_success_at": "2026-11-09T12:00:14Z", "last_attempt_at": "2026-11-09T12:00:00Z", "error": null, "retry_at": null, "coverage_notes": ["Search indexing and deleted history may omit mentions."]},
+    {"source_id": "work-github", "name": "Work GitHub", "kind": "github", "status": "ok", "last_success_at": "2026-11-09T12:00:14Z", "last_attempt_at": "2026-11-09T12:00:00Z", "error": null, "retry_at": null, "coverage_notes": ["Discovery is limited to accessible search results and retained history."]},
+    {"source_id": "work-gitlab", "name": "Work GitLab", "kind": "gitlab", "status": "ok", "last_success_at": "2026-11-09T12:00:14Z", "last_attempt_at": "2026-11-09T12:00:00Z", "error": null, "retry_at": null, "coverage_notes": ["Mention discovery depends on retained to-dos and permissions."]},
+    {"source_id": "work-codeberg", "name": "Work Codeberg", "kind": "codeberg", "status": "ok", "last_success_at": "2026-11-09T12:00:14Z", "last_attempt_at": "2026-11-09T12:00:00Z", "error": null, "retry_at": null, "coverage_notes": ["Review-request timestamps vary by server version; no unknown timer is invented."]},
+    {"source_id": "work-forgejo", "name": "Work Forgejo", "kind": "forgejo", "status": "ok", "last_success_at": "2026-11-09T12:00:14Z", "last_attempt_at": "2026-11-09T12:00:00Z", "error": null, "retry_at": null, "coverage_notes": ["Search indexing and inaccessible history may limit discovery."]}
+  ],
+  "progress": [
+    {"source_id": "jira", "phase": "completed", "completed_items": 25, "total_items": 25, "started_at": "2026-11-09T12:00:00Z", "finished_at": "2026-11-09T12:00:14Z", "elapsed_ms": 14000},
+    {"source_id": "work-github", "phase": "completed", "completed_items": 12, "total_items": 12, "started_at": "2026-11-09T12:00:00Z", "finished_at": "2026-11-09T12:00:14Z", "elapsed_ms": 14000},
+    {"source_id": "work-gitlab", "phase": "completed", "completed_items": 0, "total_items": 0, "started_at": "2026-11-09T12:00:00Z", "finished_at": "2026-11-09T12:00:14Z", "elapsed_ms": 14000},
+    {"source_id": "work-codeberg", "phase": "completed", "completed_items": 2, "total_items": 2, "started_at": "2026-11-09T12:00:00Z", "finished_at": "2026-11-09T12:00:14Z", "elapsed_ms": 14000},
+    {"source_id": "work-forgejo", "phase": "completed", "completed_items": 3, "total_items": 3, "started_at": "2026-11-09T12:00:00Z", "finished_at": "2026-11-09T12:00:14Z", "elapsed_ms": 14000}
+  ]
+}

@@ -1,15 +1,18 @@
 [book]
-title = "Pullboard documentation"
-authors = ["Pullboard contributors"]
+title = "PullBoard"
+authors = ["PullBoard contributors"]
+description = "Local attention, explicit actions: user, operator and contributor guide"
 language = "en"
 src = "src"
 
 [build]
 build-dir = "book"
+create-missing = false
+extra-watch-dirs = ["../config", "../api"]
 
 [output.html]
-no-section-label = true
-git-repository-url = ""
 default-theme = "light"
 preferred-dark-theme = "navy"
-additional-css = ["theme/pullboard.css"]
+
+[output.html.search]
+enable = true

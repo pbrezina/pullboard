@@ -1,0 +1,142 @@
+<article
+  class="work-card pr-card"
+  [class.needs-attention]="!!pr().attention"
+  cdkDrag
+  [cdkDragData]="pr()"
+  [cdkDragDisabled]="!mode.value() || !!mode.error()"
+  [cdkDragStartDelay]="{ touch: 250, mouse: 0 }"
+  (cdkDragStarted)="beginDrag()"
+  (cdkDragEnded)="endDrag()"
+  [attr.inert]="dragging() ? '' : null"
+  [attr.aria-label]="pr().title"
+>
+  <h3 class="card-title">
+    <span
+      cdkDragHandle
+      class="drag-handle"
+      (pointerdown)="prepareDrag()"
+      title="Drag onto a Jira ticket to link, or use Link to Jira"
+      aria-hidden="true"
+      >⠿</span
+    >
+    <pb-link [url]="pr().url" [label]="pr().title">{{ pr().title }}</pb-link>
+  </h3>
+  <div class="card-meta pr-meta">
+    <span class="card-tag forge-tag">{{ pr().forge }}</span>
+    <pb-link
+      class="card-tag repository-tag"
+      [url]="repoUrl()"
+      [label]="pr().owner + '/' + pr().repository"
+      ><span translate="no">{{ pr().owner }}/{{ pr().repository }}</span></pb-link
+    >
+    <pb-link class="pr-number" [url]="pr().url">#{{ pr().number }}</pb-link>
+    <span>Created <pb-time [value]="pr().created_at" /></span>
+    <span>Last activity <pb-time [value]="pr().updated_at" /></span>
+    @if (pr().attention; as attention) {
+      <span>Waiting since <pb-time [value]="attention.waiting_since" /></span>
+    }
+  </div>
+  <div class="card-tags" role="group" aria-label="PR state and labels">
+    <span class="card-tag" [class.ready]="pr().state === 'ready'">{{
+      pr().state === 'draft' ? 'Draft' : 'Ready for review'
+    }}</span>
+    @for (label of pr().labels; track $index) {
+      <span class="card-tag label-tag" [class.accepted]="label.toLowerCase() === 'accepted'">{{
+        label
+      }}</span>
+    }
+  </div>
+  @if (pr().attention; as attention) {
+    <app-attention-detail [attention]="attention" [showWaiting]="false" />
+  }
+  <p class="card-preview">{{ pr().description || 'No description provided.' }}</p>
+  <dl class="card-people">
+    <dt>Author</dt>
+    <dd>
+      <pb-link [url]="pr().author.url">{{
+        pr().author.username || pr().author.display_name || 'Unknown'
+      }}</pb-link>
+    </dd>
+    <dt>Reviewers</dt>
+    <dd>
+      @for (person of reviewers(); track person.id; let last = $last) {
+        <pb-link [url]="person.url">{{
+          person.username || person.display_name || 'Unknown'
+        }}</pb-link
+        >{{ last ? '' : ', ' }}
+      } @empty {
+        None
+      }
+    </dd>
+    <dt>Assignees</dt>
+    <dd>
+      @for (person of assignees(); track person.id; let last = $last) {
+        <pb-link [url]="person.url">{{
+          person.username || person.display_name || 'Unknown'
+        }}</pb-link
+        >{{ last ? '' : ', ' }}
+      } @empty {
+        Unassigned
+      }
+    </dd>
+  </dl>
+  <div class="linked-items">
+    <span>Linked Jira</span>
+    @for (link of linked(); track link.key) {
+      <pb-link [url]="link.issue?.url" [label]="link.issue?.title || link.key">{{
+        link.key
+      }}</pb-link>
+    } @empty {
+      <span class="muted">None linked</span>
+    }
+  </div>
+  @if (source(); as health) {
+    @if (health.status !== 'ok') {
+      <p class="source-warning">
+        {{
+          health.status === 'error' || health.status === 'backoff'
+            ? 'Stale snapshot'
+            : health.status
+        }}
+        / {{ health.source_id }}
+      </p>
+    }
+  }
+  <footer class="card-footer">
+    <div class="card-actions">
+      <button
+        class="card-secondary-action"
+        [disabled]="!mode.value() || !!mode.error()"
+        (click)="linkRequested.emit(pr())"
+      >
+        Link to Jira
+      </button>
+      @if (!attentionMode() && pr().is_mine) {
+        <button
+          class="card-secondary-action"
+          [disabled]="!store.context()?.jira_projects?.length || !mode.value() || !!mode.error()"
+          (click)="createRequested.emit({ pr: pr(), purpose: 'review' })"
+        >
+          Create review ticket
+        </button>
+      }
+      @if (attentionMode()) {
+        <button
+          class="primary-button card-primary-action"
+          [disabled]="!store.context()?.jira_projects?.length || !mode.value() || !!mode.error()"
+          (click)="createRequested.emit({ pr: pr(), purpose: 'review' })"
+        >
+          Create review ticket
+        </button>
+      } @else {
+        <button
+          class="primary-button card-primary-action"
+          [disabled]="!store.context()?.jira_projects?.length || !mode.value() || !!mode.error()"
+          (click)="createRequested.emit({ pr: pr(), purpose: 'implementation' })"
+        >
+          Create Jira ticket
+        </button>
+      }
+    </div>
+  </footer>
+</article>

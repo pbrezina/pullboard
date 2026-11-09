@@ -1,0 +1,14 @@
+.card-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.card-title > pb-link {
+  min-width: 0;
+}
+
+.card-title > .drag-handle {
+  flex: 0 0 auto;
+  margin-left: 0;
+}

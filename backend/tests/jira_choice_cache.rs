@@ -395,7 +395,7 @@ async fn wait_idle(sync: &Syncer) {
 #[tokio::test]
 async fn failed_atomic_commit_never_publishes_choices_or_success_and_the_next_commit_switches_both()
 {
-    let dir = tempfile::tempdir_in("/tmp/opencode").unwrap();
+    let dir = tempfile::tempdir().unwrap();
     let server = MockServer::start().await;
     mock_jira(&server).await;
     let mut c = config();
@@ -500,7 +500,7 @@ async fn principal_change_quarantines_cached_choices_before_a_failed_refresh() {
 
 #[tokio::test]
 async fn changed_group_and_default_policy_are_committed_together_not_applied_to_a_restored_pool() {
-    let dir = tempfile::tempdir_in("/tmp/opencode").unwrap();
+    let dir = tempfile::tempdir().unwrap();
     let server = MockServer::start().await;
     mock_jira(&server).await;
     let mut c = config();

@@ -37,6 +37,15 @@ need an administrator-reviewed ownership mapping; do not solve permission errors
 by making a credential file world-readable. Docker Desktop and remote engines
 have different bind-mount/UID semantics; these examples target a local Linux engine.
 
+## Published images
+
+Images are available at `ghcr.io/pbrezina/pullboard`. `:latest` and version tags
+come from published releases; `:nightly` tracks smoke-tested pushes to `master`
+and may contain unreleased changes. To use a published image, replace
+`localhost/pullboard:latest` in the invocation above with
+`ghcr.io/pbrezina/pullboard:latest` or `ghcr.io/pbrezina/pullboard:nightly`, and add
+`--pull=always` to fetch updates.
+
 ## Real accounts
 
 ```sh

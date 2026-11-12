@@ -193,14 +193,19 @@ formatting, unit tests, production build and Chromium/axe browser tests; mdBook
 build; and a three-stage Docker build with real image smoke. No app credentials are
 used, including in forks. Workflow default permissions are read-only.
 
-GHCR publication is a separate workflow, triggered **only** by a published release
-whose tag starts with `v`, with package-write permission scoped to that job. Merely
-pushing a tag does not publish. The registry
-path lowercases owner/repository. It never publishes a PR or normal branch push,
-and no workflow dispatch bypass exists. The release candidate passes image smoke
-before registry login/publication; the exact tested image is tagged and pushed,
-not rebuilt after verification. `GITHUB_TOKEN` authenticates CI registry
-operations; it is not an application secret mechanism and requires no `.env`.
+GHCR publication is a separate workflow with package-write permission scoped to
+the publishing job. Pushes to `master` build and publish `:nightly`; published
+releases whose tags start with `v` publish their version tag and `:latest`.
+Nightly builds never update `:latest`. Superseded master runs are canceled, and
+publication checks the current master commit so rerunning an older workflow
+cannot replace nightly with an outdated image.
+
+Merely pushing a tag does not publish. The registry path lowercases
+owner/repository. PRs and pushes to other branches never publish, and no workflow
+dispatch bypass exists. Every candidate passes image smoke before registry
+login/publication; the exact tested image is tagged and pushed, not rebuilt after
+verification. `GITHUB_TOKEN` authenticates CI registry operations; it is not an
+application secret mechanism and requires no `.env`.
 Publish corresponding versioned source with binary images to meet GPL obligations.
 
 Automated success does not imply universal upstream API support, live credential

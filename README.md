@@ -68,7 +68,8 @@ forges:
 ```
 
 Save the file with owner-only permissions, then run the published image with
-Podman on Linux. This pulls the `latest` image; see the
+Podman on Linux. This pulls `latest` from published releases. To track development
+builds from pushes to `master`, replace `:latest` with `:nightly`. See the
 [GHCR package](https://github.com/pbrezina/pullboard/pkgs/container/pullboard)
 for available versions.
 

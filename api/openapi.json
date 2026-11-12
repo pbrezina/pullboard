@@ -73,7 +73,7 @@
         "properties": {"id": {"type": "string"}, "url": {"type": "string", "format": "uri"}, "reason": {"$ref": "#/components/schemas/AttentionReason"}, "waiting_since": {"type": "string", "format": "date-time"}, "excerpt": {"type": "string"}}
       },
       "Attention": {
-        "description": "coverage describes per-item upstream attention history only; partial remains valid and never implies unhealthy source refresh.",
+        "description": "coverage describes per-item upstream attention history only; partial remains valid and never implies unhealthy source refresh. GitHub review summaries clear when every inline thread associated by upstream review ID is answered by a strictly later own human reply or explicitly resolved. Standalone reviews still require a flat reply; unrelated discussions and reviews remain independent. Bots, equal-time replies and commits never clear attention.",
         "type": "object", "additionalProperties": false, "required": ["reasons", "waiting_since", "threads", "coverage"],
         "properties": {"reasons": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/components/schemas/AttentionReason"}}, "waiting_since": {"type": "string", "format": "date-time"}, "threads": {"type": "array", "minItems": 1, "items": {"$ref": "#/components/schemas/AttentionThread"}}, "coverage": {"enum": ["complete", "partial"]}},
         "examples": [{"reasons": ["author_feedback"], "waiting_since": "2026-11-08T10:00:00Z", "threads": [{"id": "mock-thread-1", "url": "https://github.com/acme/widget/pull/42#discussion_r1", "reason": "author_feedback", "waiting_since": "2026-11-08T10:00:00Z", "excerpt": "Please add a regression test."}], "coverage": "partial"}]

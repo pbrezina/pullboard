@@ -83,6 +83,7 @@ struct Comment {
     created_at: Time,
 }
 struct Review {
+    id: String,
     body: Option<String>,
     user: User,
     submitted_at: Option<Time>,
@@ -151,6 +152,12 @@ struct GraphComment {
     created_at: Time,
     url: String,
     author: Option<Actor>,
+    #[serde(rename = "pullRequestReview")]
+    review: Option<ReviewId>,
+}
+#[derive(Deserialize)]
+struct ReviewId {
+    id: String,
 }
 #[derive(Deserialize)]
 struct Actor {
@@ -192,6 +199,7 @@ struct ReviewRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GraphReview {
+    id: String,
     body: String,
     author: Actor,
     submitted_at: Option<Time>,
@@ -209,6 +217,7 @@ struct CommitDates {
 }
 struct ReviewHistory {
     threads: Vec<Thread>,
+    handled_reviews: BTreeSet<String>,
     description_at: Option<Time>,
     editor: Option<Actor>,
 }
@@ -218,14 +227,16 @@ type Key = (String, String, u64);
 const ACTORS: &str = "fragment ActorFields on Actor { login url __typename ... on User { databaseId } ... on Bot { databaseId } ... on Mannequin { databaseId } ... on Organization { databaseId } }";
 const PAGE: &str = "totalCount pageInfo { hasNextPage endCursor }";
 const COMMENT_FIELDS: &str = "body createdAt url author { ...ActorFields }";
-const REVIEW_FIELDS: &str = "body submittedAt state author { ...ActorFields }";
+const REVIEW_COMMENT_FIELDS: &str =
+    "body createdAt url author { ...ActorFields } pullRequestReview { id }";
+const REVIEW_FIELDS: &str = "id body submittedAt state author { ...ActorFields }";
 const COMMIT_FIELDS: &str = "commit { committedDate authoredDate }";
 const REQUEST_FIELDS: &str = "requestedReviewer { __typename ... on User { ...ActorFields } ... on Bot { ...ActorFields } ... on Mannequin { ...ActorFields } }";
 
 fn thread_fields() -> String {
     // A smaller nested page avoids multiplying the GraphQL node cost by 100²
     // for every PR. Every remaining comment page is still fetched below.
-    format!("id isResolved comments(first:20) {{ nodes {{ {COMMENT_FIELDS} }} {PAGE} }}")
+    format!("id isResolved comments(first:20) {{ nodes {{ {REVIEW_COMMENT_FIELDS} }} {PAGE} }}")
 }
 
 fn oversized(errors: &[Value]) -> bool {
@@ -632,6 +643,7 @@ impl Github {
             .into_iter()
             .map(|r| {
                 Ok(Review {
+                    id: r.id,
                     body: Some(r.body),
                     user: r.author.user()?,
                     submitted_at: r.submitted_at,
@@ -701,6 +713,7 @@ impl Github {
             if let Some(at) = r.submitted_at
                 && !r.user.login.eq_ignore_ascii_case(me)
                 && !r.body.as_deref().unwrap_or_default().trim().is_empty()
+                && !history.handled_reviews.contains(&r.id)
             {
                 let body = r.body.clone().unwrap_or_default();
                 flat.events.push(Event {
@@ -833,13 +846,14 @@ impl Github {
         editor: Option<Actor>,
     ) -> Result<ReviewHistory> {
         let mut out = vec![];
+        let mut handled_reviews = BTreeMap::new();
         for t in threads {
             let comments = self
                 .complete(
                     &t.id,
                     "PullRequestReviewThread",
                     "comments",
-                    COMMENT_FIELDS,
+                    REVIEW_COMMENT_FIELDS,
                     t.comments,
                 )
                 .await?;
@@ -847,7 +861,14 @@ impl Github {
                 .first()
                 .and_then(|c| safe_url(&c.url))
                 .unwrap_or_else(|| url.to_owned());
-            let events = comments
+            // A review can comment on several threads, including replies on
+            // existing threads. Associate only through upstream IDs, never by
+            // reviewer or timestamp, and inspect every comment page first.
+            let review_ids: BTreeSet<_> = comments
+                .iter()
+                .filter_map(|c| c.review.as_ref().map(|r| r.id.clone()))
+                .collect();
+            let events: Vec<_> = comments
                 .into_iter()
                 .map(|c| Event {
                     at: c.created_at,
@@ -860,6 +881,22 @@ impl Github {
                     excerpt: c.body,
                 })
                 .collect();
+            let replied_at = events
+                .iter()
+                .filter(|e| e.own && !e.bot)
+                .map(|e| e.at)
+                .max();
+            // Unlike attention eligibility, answering a review requires handling
+            // every associated thread, even comments without a self mention on
+            // someone else's PR. Equal timestamps are not subsequent replies.
+            let handled = t.is_resolved
+                || replied_at.is_some_and(|at| events.iter().all(|e| e.own || e.bot || e.at < at));
+            for id in review_ids {
+                handled_reviews
+                    .entry(id)
+                    .and_modify(|all_handled| *all_handled &= handled)
+                    .or_insert(handled);
+            }
             out.push(Thread {
                 id: t.id,
                 url: thread_url,
@@ -869,6 +906,10 @@ impl Github {
         }
         Ok(ReviewHistory {
             threads: out,
+            handled_reviews: handled_reviews
+                .into_iter()
+                .filter_map(|(id, handled)| handled.then_some(id))
+                .collect(),
             description_at,
             editor,
         })

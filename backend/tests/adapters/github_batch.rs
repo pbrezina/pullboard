@@ -155,7 +155,7 @@ async fn all_connections_and_nested_review_comments_are_fully_paginated() {
     let mut other = graph_actor(8, "beta");
     other["url"] = json!("javascript:alert(1)");
     let own = graph_actor(1, "me");
-    let review = json!({"body":"Submitted feedback","author":other.clone(),"submittedAt":"2026-01-06T00:00:00Z","state":"APPROVED"});
+    let review = json!({"id":"review-beta","body":"Submitted feedback","author":other.clone(),"submittedAt":"2026-01-06T00:00:00Z","state":"APPROVED"});
     let thread = json!({"id":"thread-later","isResolved":false,"comments":paged(vec![graph_comment("Please fix",2,graph_actor(2,"alpha"))],2,"thread-comment-page")});
     let page_pairs = [
         ("assignees", vec![own.clone()], vec![other.clone()]),
@@ -396,7 +396,7 @@ async fn body_revision_and_submitted_review_timestamps_remain_separate_from_flat
         pull["editor"] = editor;
         if own_review {
             pull["reviews"] = connection(vec![
-                json!({"body":"Review submitted","author":graph_actor(1,"me"),"state":"COMMENTED","submittedAt":"2026-01-05T00:00:00Z"}),
+                json!({"id":"own-review","body":"Review submitted","author":graph_actor(1,"me"),"state":"COMMENTED","submittedAt":"2026-01-05T00:00:00Z"}),
             ]);
         }
         Mock::given(method("GET")).and(path("/repos/acme/widget/issues/42/timeline"))
@@ -575,8 +575,8 @@ async fn bot_events_resolved_threads_and_pending_reviews_do_not_invent_attention
     bot["__typename"] = json!("Bot");
     pull["comments"] = connection(vec![graph_comment("@me bot feedback", 9, bot.clone())]);
     pull["reviews"] = connection(vec![
-        json!({"body":"@me review from bot","author":bot.clone(),"state":"COMMENTED","submittedAt":"2026-01-08T00:00:00Z"}),
-        json!({"body":"Pending review","author":graph_actor(10,"pending-user"),"state":"PENDING","submittedAt":null}),
+        json!({"id":"bot-review","body":"@me review from bot","author":bot.clone(),"state":"COMMENTED","submittedAt":"2026-01-08T00:00:00Z"}),
+        json!({"id":"pending-review","body":"Pending review","author":graph_actor(10,"pending-user"),"state":"PENDING","submittedAt":null}),
     ]);
     let mut bot_thread = graph_comment("@me bot thread", 8, bot);
     bot_thread["url"] = json!("javascript:alert(1)");
@@ -684,6 +684,299 @@ async fn short_search_pages_do_not_truncate_inventory_and_timeline_follows_every
         assert_eq!(
             attention.waiting_since.to_rfc3339(),
             "2026-01-08T00:00:00+00:00"
+        );
+    }
+}
+
+fn review_comment(body: &str, day: u32, author: Value, review_id: &str) -> Value {
+    let mut comment = graph_comment(body, day, author);
+    comment["pullRequestReview"] = json!({"id":review_id});
+    comment
+}
+
+fn review_summary(id: &str, body: &str, day: u32) -> Value {
+    json!({"id":id,"body":body,"author":graph_actor(2,"alpha"),"state":"CHANGES_REQUESTED","submittedAt":format!("2026-01-{day:02}T00:00:00Z")})
+}
+
+#[tokio::test]
+async fn review_summary_clears_only_when_every_associated_thread_is_answered_or_resolved() {
+    for mode in [
+        "unanswered",
+        "one-answer",
+        "all-answered",
+        "resolved",
+        "mixed",
+        "equal-time",
+        "bot-reply",
+        "reopened",
+    ] {
+        let server = MockServer::start().await;
+        inventory(&server, &[("acme", "widget", 42)]).await;
+        let mut pull = graph_pull("acme", "widget", 42);
+        pull["reviews"] = connection(vec![review_summary(
+            "review",
+            "Please see inline comments",
+            3,
+        )]);
+        let mut threads = vec![];
+        for index in 0..2 {
+            let mut comments = vec![review_comment(
+                "Please fix",
+                2,
+                graph_actor(2, "alpha"),
+                "review",
+            )];
+            let answered = matches!(
+                mode,
+                "all-answered" | "equal-time" | "bot-reply" | "reopened"
+            ) || (matches!(mode, "one-answer" | "mixed") && index == 0);
+            if answered {
+                let mut actor = graph_actor(1, "ME");
+                if mode == "bot-reply" {
+                    actor["__typename"] = json!("Bot");
+                }
+                comments.push(review_comment(
+                    "Answered",
+                    if mode == "equal-time" { 2 } else { 4 },
+                    actor,
+                    "own-review",
+                ));
+            }
+            if mode == "reopened" && index == 1 {
+                comments.push(review_comment(
+                    "One more thing",
+                    5,
+                    graph_actor(2, "alpha"),
+                    "follow-up-review",
+                ));
+            }
+            threads.push(json!({"id":format!("thread-{index}"),"isResolved":mode == "resolved" || (mode == "mixed" && index == 1),"comments":connection(comments)}));
+        }
+        pull["reviewThreads"] = connection(threads);
+        graph_batch(&server, vec![pull]).await;
+        let adapter = forge::build(&forge("github", &server.uri()), &Upstream::default())
+            .await
+            .unwrap();
+        let data = adapter.discover().await.unwrap();
+        let attention = &data.pull_requests[0].attention;
+        if matches!(mode, "all-answered" | "resolved" | "mixed") {
+            assert!(attention.is_none(), "{mode}: {attention:?}");
+        } else {
+            let attention = attention.as_ref().unwrap();
+            assert!(
+                attention
+                    .threads
+                    .iter()
+                    .any(|t| t.id == "conversation" && t.excerpt == "Please see inline comments"),
+                "{mode}"
+            );
+            assert!(
+                attention
+                    .threads
+                    .iter()
+                    .any(|t| t.id.starts_with("thread-")),
+                "{mode}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn handled_review_summary_does_not_clear_unrelated_flat_feedback_or_other_reviews() {
+    for mode in ["flat", "standalone-review", "other-review", "description"] {
+        let server = MockServer::start().await;
+        inventory(&server, &[("acme", "widget", 42)]).await;
+        let mut pull = graph_pull("acme", "widget", 42);
+        let mut reviews = vec![review_summary("handled-review", "Handled summary", 2)];
+        let mut threads = vec![
+            json!({"id":"handled-thread","isResolved":false,"comments":connection(vec![
+                review_comment("Please fix", 2, graph_actor(2,"alpha"), "handled-review"),
+                review_comment("Answered", 4, graph_actor(1,"me"), "own-review"),
+            ])}),
+        ];
+        match mode {
+            "flat" => {
+                pull["comments"] = connection(vec![graph_comment(
+                    "Unrelated feedback",
+                    3,
+                    graph_actor(2, "alpha"),
+                )])
+            }
+            "description" => {
+                pull["body"] = json!("Unrelated feedback @me");
+                pull["lastEditedAt"] = json!("2026-01-03T00:00:00Z");
+                pull["editor"] = graph_actor(2, "alpha");
+            }
+            _ => {
+                reviews.push(review_summary("other-review", "Unrelated feedback", 3));
+                if mode == "other-review" {
+                    threads.push(json!({"id":"unanswered-thread","isResolved":false,"comments":connection(vec![
+                        review_comment("Unanswered feedback", 3, graph_actor(2,"alpha"), "other-review"),
+                    ])}));
+                }
+            }
+        }
+        pull["reviews"] = connection(reviews);
+        pull["reviewThreads"] = connection(threads);
+        graph_batch(&server, vec![pull]).await;
+        let adapter = forge::build(&forge("github", &server.uri()), &Upstream::default())
+            .await
+            .unwrap();
+        let data = adapter.discover().await.unwrap();
+        let attention = data.pull_requests[0].attention.as_ref().unwrap();
+        assert_eq!(
+            attention.waiting_since.to_rfc3339(),
+            "2026-01-03T00:00:00+00:00",
+            "{mode}"
+        );
+        assert_eq!(
+            attention.threads.len(),
+            if mode == "other-review" { 2 } else { 1 },
+            "{mode}"
+        );
+        let flat = attention
+            .threads
+            .iter()
+            .find(|t| t.id == "conversation")
+            .unwrap();
+        assert!(flat.excerpt.starts_with("Unrelated feedback"), "{mode}");
+    }
+}
+
+#[tokio::test]
+async fn standalone_review_summary_requires_a_flat_reply_not_an_unrelated_submitted_review() {
+    for mode in ["unanswered", "own-review", "flat-reply"] {
+        let server = MockServer::start().await;
+        inventory(&server, &[("acme", "widget", 42)]).await;
+        let mut pull = graph_pull("acme", "widget", 42);
+        let mut reviews = vec![review_summary("standalone", "Please add tests", 2)];
+        if mode == "own-review" {
+            let mut own = review_summary("own-review", "Unrelated review", 4);
+            own["author"] = graph_actor(1, "me");
+            reviews.push(own);
+        }
+        if mode == "flat-reply" {
+            pull["comments"] =
+                connection(vec![graph_comment("Tests added", 4, graph_actor(1, "me"))]);
+        }
+        pull["reviews"] = connection(reviews);
+        graph_batch(&server, vec![pull]).await;
+        let adapter = forge::build(&forge("github", &server.uri()), &Upstream::default())
+            .await
+            .unwrap();
+        let data = adapter.discover().await.unwrap();
+        assert_eq!(
+            data.pull_requests[0].attention.is_none(),
+            mode == "flat-reply",
+            "{mode}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn review_summary_clearing_uses_all_review_thread_and_reply_pages() {
+    let server = MockServer::start().await;
+    inventory(&server, &[("acme", "widget", 42)]).await;
+    let mut pull = graph_pull("acme", "widget", 42);
+    pull["reviews"] = paged(vec![], 1, "reviews-page");
+    graph_page(
+        &server,
+        "PR_acme_widget_42",
+        "reviews",
+        "reviews-page",
+        final_page(
+            vec![review_summary("review", "Please see inline comments", 3)],
+            1,
+        ),
+    )
+    .await;
+    pull["reviewThreads"] = paged(vec![], 1, "threads-page");
+    graph_page(&server, "PR_acme_widget_42", "reviewThreads", "threads-page", final_page(vec![json!({
+        "id":"thread","isResolved":false,"comments":paged(vec![review_comment("Please fix", 2, graph_actor(2,"alpha"), "review")], 2, "replies-page")
+    })], 1)).await;
+    graph_page(
+        &server,
+        "thread",
+        "comments",
+        "replies-page",
+        final_page(
+            vec![review_comment(
+                "Answered",
+                4,
+                graph_actor(1, "me"),
+                "own-review",
+            )],
+            2,
+        ),
+    )
+    .await;
+    graph_batch(&server, vec![pull]).await;
+    let adapter = forge::build(&forge("github", &server.uri()), &Upstream::default())
+        .await
+        .unwrap();
+    let data = adapter.discover().await.unwrap();
+    assert!(data.pull_requests[0].attention.is_none());
+    for request in server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method == "POST")
+    {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        let query = body["query"].as_str().unwrap();
+        assert!(!query.contains("mutation"));
+        if body["variables"]["after"] != "reviews-page" {
+            assert!(query.contains("pullRequestReview { id }"), "{query}");
+        } else {
+            assert!(query.contains("id body submittedAt"), "{query}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn review_summary_requires_proven_associations_and_answers_even_on_someone_elses_pr() {
+    for mode in [
+        "unanswered-unmentioned-thread",
+        "unavailable-association",
+        "answered",
+        "later-bot",
+    ] {
+        let server = MockServer::start().await;
+        inventory(&server, &[("acme", "widget", 42)]).await;
+        let mut pull = graph_pull("acme", "widget", 42);
+        pull["author"] = graph_actor(3, "zeta");
+        pull["reviews"] = connection(vec![review_summary("review", "Please look @me", 3)]);
+        let mut first = review_comment("Please fix", 2, graph_actor(2, "alpha"), "review");
+        if mode == "unavailable-association" {
+            first["pullRequestReview"] = Value::Null;
+        }
+        let mut comments = vec![first];
+        if mode != "unanswered-unmentioned-thread" {
+            comments.push(review_comment(
+                "Answered",
+                4,
+                graph_actor(1, "me"),
+                "own-review",
+            ));
+        }
+        if mode == "later-bot" {
+            let mut bot = graph_actor(9, "robot");
+            bot["__typename"] = json!("Bot");
+            comments.push(review_comment("@me automated note", 5, bot, "bot-review"));
+        }
+        pull["reviewThreads"] = connection(vec![
+            json!({"id":"thread","isResolved":false,"comments":connection(comments)}),
+        ]);
+        graph_batch(&server, vec![pull]).await;
+        let adapter = forge::build(&forge("github", &server.uri()), &Upstream::default())
+            .await
+            .unwrap();
+        let data = adapter.discover().await.unwrap();
+        assert_eq!(
+            data.pull_requests[0].attention.is_none(),
+            matches!(mode, "answered" | "later-bot"),
+            "{mode}"
         );
     }
 }

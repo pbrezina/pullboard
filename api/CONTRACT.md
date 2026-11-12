@@ -224,6 +224,13 @@ For each stream, the user's latest reply/qualifying review clears prior events;
 explicit resolution clears the stream. Subsequent events reopen attention. A push
 alone never clears a thread. General flat comments are one stream, separate from
 review threads. Ignore bots and the user's own events when opening attention.
+For GitHub, associate a review summary with inline threads through upstream review
+IDs, never author/text/timestamp guesses. Once every associated thread is answered
+by a strictly later human reply from the user or explicitly resolved, omit that
+review's summary from attention. Otherwise the summary retains normal flat-conversation
+reply-clearing rules; bots, equal-time replies and commits do not count as answers. Standalone summaries
+without associated threads still require a subsequent flat reply. Handling one review
+never clears unrelated flat comments, description mentions or other reviews.
 An unanswered review request is its own stream; a submitted review clears that
 request, but not unrelated review threads. Jira descriptions/comments use explicit
 account mentions and the user's subsequent comment clears prior mentions on that

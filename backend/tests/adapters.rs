@@ -95,7 +95,7 @@ async fn github_fixture(reviewed: bool) -> MockServer {
     let mut comments = vec![graph_comment("Flat feedback", 1, graph_actor(2, "alpha"))];
     if reviewed {
         pull["reviews"] = connection(vec![
-            json!({"body":"My submitted review is not a flat reply","author":graph_actor(1,"me"),"submittedAt":"2026-01-03T00:00:00Z","state":"COMMENTED"}),
+            json!({"id":"own-review","body":"My submitted review is not a flat reply","author":graph_actor(1,"me"),"submittedAt":"2026-01-03T00:00:00Z","state":"COMMENTED"}),
         ]);
     } else {
         comments.push(graph_comment(

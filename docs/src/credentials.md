@@ -22,6 +22,13 @@ explicit; the server never silently substitutes plaintext. File-based secrets
 remain a supported **deliberate** choice: protect the whole YAML with mode 600,
 avoid unsafe backups, and never commit or send it with a bug report.
 
+The [Linux x86-64 setup wizard](setup.md) uses masked secret fields and writes
+mode-0600 `~/.config/pullboard/config.yaml` plus one protected previous-version
+`.bak` on replacement. Both contain secrets. It neither resolves native keyring
+references nor installs a keyring bridge; deliberately reenter credentials or use
+the manual keyring deployment path. Changing a Jira URL prefill does not authorize
+sending a retained token to a different host without explicit credential confirmation.
+
 Keyring `account` is only the secret lookup key. It is not a forge username or
 Jira account ID. No upstream identity/display name is configured; authenticated
 `/user` (forges) or `/rest/api/3/myself` (Jira) discovers it at runtime. Jira `email`

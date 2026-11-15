@@ -4,7 +4,7 @@ use pullboard::config::{Config, Secret};
 
 #[tokio::test]
 async fn all_sanitized_examples_validate_without_resolving_placeholder_credentials() {
-    for file in ["pullboard.yaml", "container.yaml", "example.yaml"] {
+    for file in ["container.yaml", "example.yaml"] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../config")
             .join(file);
@@ -25,7 +25,7 @@ fn separate_instance_ids_are_supported_and_duplicate_ids_rejected() {
 
 #[test]
 fn strict_policy_only_schema_and_forge_name_fallback() {
-    let minimal = "base_url: https://jira.example\nemail: me@example.invalid\ntoken: {value: placeholder}\nprojects: [DEV]\nboard_id: 42\nteam: Platform\nsprint_name_pattern: '%YEAR-Platform-S%NUMBER'\n";
+    let minimal = "base_url: https://jira.example\nemail: me@example.invalid\ntoken: {value: placeholder}\nprojects: [DEV]\nboard_id: 42\nteam: Platform\nsprint_name_pattern: 'Platform'\n";
     for removed in [
         "account_id: old",
         "display_name: old",
@@ -42,7 +42,7 @@ fn strict_policy_only_schema_and_forge_name_fallback() {
     for required in [
         "board_id: 42\n",
         "team: Platform\n",
-        "sprint_name_pattern: '%YEAR-Platform-S%NUMBER'\n",
+        "sprint_name_pattern: 'Platform'\n",
     ] {
         assert!(
             serde_yaml::from_str::<pullboard::config::JiraConfig>(&minimal.replace(required, ""))
@@ -89,36 +89,34 @@ fn strict_policy_only_schema_and_forge_name_fallback() {
 }
 
 #[test]
-fn sprint_pattern_is_anchored_literal_and_ascii_not_current_year() {
-    let mut c = config();
-    let mut blank = jira("https://jira.example");
-    blank.sprint_name_pattern = " \t\n".into();
-    assert!(blank.sprint_pattern().is_err());
-    c.jira = Some(blank);
-    assert!(c.validate().is_err());
-    let mut j = jira("https://jira.example");
-    j.sprint_name_pattern = "%YEAR-X.+-S%NUMBER".into();
-    let p = j.sprint_pattern().unwrap();
-    for name in ["1999-X.+-S1", "2027-X.+-S002"] {
-        assert!(p.is_match(name));
+fn sprint_pattern_is_regex_search_with_optional_anchors_and_flags() {
+    use pullboard::config::SprintPattern;
+    let p = SprintPattern::new("SSSD-IDENTITY").unwrap();
+    assert!(p.is_match("2026-SSSD-IDENTITY-S42"));
+    assert!(!p.is_match("sssd-identity"));
+    let p = SprintPattern::new("(?i)sssd-identity").unwrap();
+    assert!(p.is_match("2026-SSSD-IDENTITY-S42"));
+    let p = SprintPattern::new(r"\A[0-9]{4}-X.+-S[0-9]+\z").unwrap();
+    assert!(p.is_match("1999-Xtest-S002"));
+    assert!(!p.is_match("prefix1999-Xtest-S002"));
+    assert!(!p.is_match("1999-Xtest-S002suffix"));
+    let p = SprintPattern::new("%YEAR-Platform-S%NUMBER").unwrap();
+    assert!(p.is_match("%YEAR-Platform-S%NUMBER"));
+    assert!(!p.is_match("2026-Platform-S1")); // No legacy expansion.
+}
+
+#[test]
+fn sprint_regex_rejects_blank_invalid_overlong_and_large_compiled_expressions() {
+    use pullboard::config::SprintPattern;
+    for bad in ["", " \t\n", "[", "(?=lookahead)", "(?:a{1000}){1000}"] {
+        assert!(SprintPattern::new(bad).is_err());
     }
-    for name in [
-        "2026-Xaa-S1",
-        "x2026-X.+-S1",
-        "2026-X.+-S1x",
-        "2026-X.+-S",
-        "２０２６-X.+-S1",
-        "2026-X.+-S１",
-        "2026-X.+-S1\n",
-    ] {
-        assert!(!p.is_match(name));
-    }
-    for bad in ["%", "%MONTH", "%YEARS", "%NUMBERED", "%year"] {
-        j.sprint_name_pattern = bad.into();
-        assert!(j.sprint_pattern().is_err());
-    }
-    j.sprint_name_pattern = "Literal (not regex)".into();
-    assert!(j.sprint_pattern().unwrap().is_match("Literal (not regex)"));
+    assert!(SprintPattern::new(&"a".repeat(4096)).is_ok());
+    assert!(SprintPattern::new(&"a".repeat(4097)).is_err());
+    assert!(SprintPattern::new(&"é".repeat(2048)).is_ok());
+    assert!(SprintPattern::new(&"é".repeat(2049)).is_err());
+    let yaml = "jira: {base_url: https://jira.example, email: me@example.invalid, token: {value: placeholder}, projects: [DEV], board_id: 1, team: Platform, sprint_name_pattern: '['}";
+    assert!(serde_yaml::from_str::<Config>(yaml).is_err());
 }
 
 #[test]

@@ -394,51 +394,58 @@ async fn codeberg_and_forgejo_discover_account_involvement_across_repositories_r
 }
 #[tokio::test]
 async fn transport_paginates_and_reuses_etags() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/api/v1/items"))
-        .and(query_param("page", "1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([1, 2])))
-        .expect(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/api/v1/items"))
-        .and(query_param("page", "2"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([3])))
-        .expect(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/api/v1/conditional"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("etag", "\"one\"")
-                .set_body_json(json!({"value":42})),
-        )
-        .up_to_n_times(1)
-        .expect(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/api/v1/conditional"))
-        .and(header("if-none-match", "\"one\""))
-        .respond_with(ResponseTemplate::new(304))
-        .expect(1)
-        .mount(&server)
-        .await;
-    let limits = Upstream {
-        page_size: 2,
-        ..Default::default()
-    };
-    let t = ReadTransport::new(&forge("forgejo", &server.uri()), &limits)
-        .await
-        .unwrap();
-    let items: Vec<i32> = t.pages("items", &[]).await.unwrap();
-    assert_eq!(items, [1, 2, 3]);
-    let first: Value = t.get("conditional", &[]).await.unwrap();
-    let second: Value = t.get("conditional", &[]).await.unwrap();
-    assert_eq!(first, second);
+    for (kind, prefix) in [
+        ("github", ""),
+        ("gitlab", "/api/v4"),
+        ("codeberg", "/api/v1"),
+        ("forgejo", "/api/v1"),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("{prefix}/items")))
+            .and(query_param("page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([1, 2])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{prefix}/items")))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([3])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{prefix}/conditional")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("etag", "\"one\"")
+                    .set_body_json(json!({"value":42})),
+            )
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("{prefix}/conditional")))
+            .and(header("if-none-match", "\"one\""))
+            .respond_with(ResponseTemplate::new(304))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let limits = Upstream {
+            page_size: 2,
+            ..Default::default()
+        };
+        let t = ReadTransport::new(&forge(kind, &server.uri()), &limits)
+            .await
+            .unwrap();
+        let items: Vec<i32> = t.pages("items", &[]).await.unwrap();
+        assert_eq!(items, [1, 2, 3]);
+        let first: Value = t.get("conditional", &[]).await.unwrap();
+        let second: Value = t.get("conditional", &[]).await.unwrap();
+        assert_eq!(first, second);
+    }
 }
 
 #[tokio::test]
@@ -494,7 +501,7 @@ async fn rate_limit_is_not_retried_until_upstream_deadline() {
 }
 
 #[tokio::test]
-async fn gitlab_first_request_retains_retry_after_instead_of_hidden_builder_probe() {
+async fn gitlab_first_explicit_request_retains_retry_after() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v4/user"))

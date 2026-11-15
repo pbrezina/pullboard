@@ -1,4 +1,4 @@
-name: Publish image
+name: Publish image and setup
 
 on:
   push:
@@ -15,9 +15,11 @@ concurrency:
 
 jobs:
   ghcr:
-    if: github.event_name == 'push' || startsWith(github.event.release.tag_name, 'v')
+    if: github.event_name == 'push' || (startsWith(github.event.release.tag_name, 'v') && !github.event.release.prerelease)
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
     permissions:
       contents: read
       packages: write
@@ -57,6 +59,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish the exact tested image
+        id: publish
         shell: bash
         env:
           IMAGE_TAGS: ${{ steps.metadata.outputs.tags }}
@@ -74,3 +77,55 @@ jobs:
             docker tag localhost/pullboard:publish-candidate "$tag"
             docker push "$tag"
           done <<< "$IMAGE_TAGS"
+          echo 'published=true' >> "$GITHUB_OUTPUT"
+
+  setup:
+    if: github.event_name == 'push' || (startsWith(github.event.release.tag_name, 'v') && !github.event.release.prerelease)
+    uses: ./.github/workflows/setup-build.yml
+    with:
+      ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
+
+  setup-assets:
+    name: Publish setup only after matching image
+    needs: [ghcr, setup]
+    if: needs.ghcr.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: pullboard-setup
+          path: ${{ runner.temp }}/setup-release
+      - name: Verify transferred assets
+        working-directory: ${{ runner.temp }}/setup-release
+        run: sha256sum -c SHA256SUMS
+      - name: Attach versioned assets or update rolling nightly prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ "$EVENT_NAME" = push ]; then
+            master_sha="$(git ls-remote --exit-code origin refs/heads/master | cut -f1)"
+            if [ "$master_sha" != "$GITHUB_SHA" ]; then
+              echo '::notice::Skipping superseded nightly setup assets; master has advanced.'
+              exit 0
+            fi
+            RELEASE_TAG=nightly
+            notes="Rolling development setup and source for commit $GITHUB_SHA. The matching :nightly image passed smoke tests and was published first. SHA256SUMS detects corruption, not independent publisher authenticity. Linux x86-64 only."
+            if gh release view nightly >/dev/null 2>&1; then
+              gh api --method PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$GITHUB_SHA" -F force=true
+              gh release edit nightly --prerelease --latest=false --title 'Nightly' --notes "$notes"
+            else
+              gh release create nightly --target "$GITHUB_SHA" --prerelease --latest=false --title 'Nightly' --notes "$notes"
+            fi
+          fi
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/setup-release/"* --clobber
+          # GITHUB_TOKEN-created releases do not start another workflow; the image
+          # job also explicitly excludes the non-v nightly tag and prereleases.

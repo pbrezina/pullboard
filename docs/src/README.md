@@ -23,10 +23,11 @@ issue URL to open a deterministic editable Jira draft. Closed/unassigned URL loo
 are allowed; nothing is created until explicit submission. This path uses no AI and
 does not copy comments/attachments or track clones/search Jira for duplicates.
 
-Start with the [empty local board](quickstart.md), then configure only the accounts
-you need. There is no runtime sample-data mode: empty means empty. Keep read-only
-test mode on while learning the explicit ticket and link flows. Simulated actions
-succeed visibly but do not invent records or IDs.
+Start with the [terminal setup wizard](setup.md), or an [empty local board](quickstart.md),
+then configure only the accounts you need. New wizard installs ask about Test mode
+and default to Live; select Test while learning the explicit ticket and link flows.
+There is no runtime sample-data mode: empty means empty. Simulated actions succeed
+visibly but do not invent records or IDs.
 
 All application settings live in one YAML per run. `docs/book.toml`, Cargo
 manifests, npm metadata, Make variables and CI YAML configure **build tools**, not

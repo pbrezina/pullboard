@@ -69,7 +69,7 @@ async fn streaming_server() -> StreamingServer {
 }
 
 #[tokio::test]
-async fn concurrency_is_shared_across_sdks_instances_and_jira_through_body_read() {
+async fn concurrency_is_shared_across_forges_instances_and_jira_through_body_read() {
     let server = streaming_server().await;
     let limits = Upstream {
         max_concurrent_requests: 2,
@@ -347,6 +347,116 @@ async fn http_403_secondary_body_without_rate_headers_stops_other_buckets() {
 }
 
 #[tokio::test]
+async fn github_secondary_body_upgrades_exhausted_primary_headers_to_origin_backoff() {
+    for graphql in [false, true] {
+        let server = MockServer::start().await;
+        let reset = (chrono::Utc::now() + chrono::Duration::seconds(120))
+            .timestamp()
+            .to_string();
+        let body = if graphql {
+            json!({"errors": [{"message": "You have exceeded a secondary rate limit.",
+                "extensions": {"code": "RATE_LIMITED"}}]})
+        } else {
+            json!({"message": "You have triggered an abuse detection mechanism."})
+        };
+        Mock::given(method(if graphql { "POST" } else { "GET" }))
+            .and(path(if graphql {
+                "/graphql"
+            } else {
+                "/search/issues"
+            }))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .insert_header("x-ratelimit-remaining", "0")
+                    .insert_header("x-ratelimit-reset", reset.as_str())
+                    .insert_header(
+                        "x-ratelimit-resource",
+                        if graphql { "graphql" } else { "search" },
+                    )
+                    .set_body_json(body),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let limits = Upstream::default();
+        let first = ReadTransport::new(&forge("github", &server.uri()), &limits)
+            .await
+            .unwrap();
+        let second = ReadTransport::new(&forge("github", &server.uri()), &limits)
+            .await
+            .unwrap();
+        let jira = Jira::new(&jira(&server.uri()), &limits).await.unwrap();
+        let error = if graphql {
+            first
+                .query::<Value, _>("query Test { viewer { login } }", json!({}))
+                .await
+                .unwrap_err()
+        } else {
+            first.get::<Value>("search/issues", &[]).await.unwrap_err()
+        };
+        assert_eq!(error.code, "upstream_backoff");
+        assert_eq!(error.retry_at.unwrap().timestamp().to_string(), reset);
+        let (core, search, graphql, jira) = tokio::join!(
+            second.get::<Value>("user", &[]),
+            second.get::<Value>("search/issues", &[]),
+            second.query::<Value, _>("query Test { viewer { login } }", json!({})),
+            jira.identity(),
+        );
+        for error in [
+            core.unwrap_err(),
+            search.unwrap_err(),
+            graphql.unwrap_err(),
+            jira.unwrap_err(),
+        ] {
+            assert_eq!(error.code, "upstream_backoff");
+            assert_eq!(error.retry_at.unwrap().timestamp().to_string(), reset);
+        }
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn github_primary_header_backoff_survives_an_oversized_error_body() {
+    for graphql in [false, true] {
+        let server = MockServer::start().await;
+        let reset = (chrono::Utc::now() + chrono::Duration::seconds(120))
+            .timestamp()
+            .to_string();
+        Mock::given(method(if graphql { "POST" } else { "GET" }))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .insert_header("x-ratelimit-remaining", "0")
+                    .insert_header("x-ratelimit-reset", reset.as_str())
+                    .set_body_string("private oversized error body"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let transport = ReadTransport::new(
+            &forge("github", &server.uri()),
+            &Upstream {
+                max_response_bytes: 16,
+                ..Upstream::default()
+            },
+        )
+        .await
+        .unwrap();
+        let error = if graphql {
+            transport
+                .query::<Value, _>("query Test { viewer { login } }", json!({}))
+                .await
+                .unwrap_err()
+        } else {
+            transport.get::<Value>("user", &[]).await.unwrap_err()
+        };
+        assert_eq!(error.code, "upstream_backoff");
+        assert_eq!(error.retry_at.unwrap().timestamp().to_string(), reset);
+        assert!(!error.message.contains("private"));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
 async fn graphql_success_rate_metadata_exhausts_only_graphql_budget() {
     let server = MockServer::start().await;
     let reset = (chrono::Utc::now() + chrono::Duration::seconds(120)).to_rfc3339();
@@ -424,24 +534,26 @@ async fn graphql_typed_primary_rate_error_honors_reset_without_blocking_core() {
 
 #[tokio::test]
 async fn rest_retries_are_bounded_and_graphql_mutations_remain_rejected() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(503))
-        .expect(2)
-        .mount(&server)
-        .await;
-    let transport = ReadTransport::new(&forge("github", &server.uri()), &Upstream::default())
-        .await
-        .unwrap();
-    assert_eq!(
-        transport.get::<Value>("user", &[]).await.unwrap_err().code,
-        "upstream_failure"
-    );
-    assert!(
-        transport
-            .query::<Value, _>("mutation Test { test }", json!({}))
+    for kind in ["github", "gitlab", "codeberg", "forgejo"] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let transport = ReadTransport::new(&forge(kind, &server.uri()), &Upstream::default())
             .await
-            .is_err()
-    );
-    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+            .unwrap();
+        assert_eq!(
+            transport.get::<Value>("user", &[]).await.unwrap_err().code,
+            "upstream_failure"
+        );
+        assert!(
+            transport
+                .query::<Value, _>("mutation Test { test }", json!({}))
+                .await
+                .is_err()
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
 }

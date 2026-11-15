@@ -8,6 +8,11 @@
 !backend/Cargo.lock
 !backend/src/
 !backend/src/**
+!crates/
+!crates/pullboard-core/
+!crates/pullboard-core/Cargo.toml
+!crates/pullboard-core/src/
+!crates/pullboard-core/src/**
 !api/
 !api/CONTRACT.md
 !api/openapi.json

@@ -40,7 +40,7 @@ and **Future**, **No sprint**, and **All sprints & no sprint**. There is no synt
 eligible-active-sprints option. Needs Attention initially includes all sprint and
 no-sprint work, so backlog mentions remain visible. Upstream Pull Requests (Overview)
 initially selects an actual sprint ID only when **exactly one** active sprint matches
-the configured full-name pattern. Zero matches show **No current sprint**; multiple
+the configured Rust regex search. Zero matches show **No current sprint**; multiple
 matches show **Multiple current sprints — choose a sprint**. Both leave Jira results
 empty until you choose a filter—no first-sprint, union or all-sprints fallback.
 Nonmatching, foreign-origin and future sprints remain available for explicit choice.

@@ -52,8 +52,9 @@ inferred from configuration or name. Who-am-I shows only pattern-matching active
 sprints, their available end dates and links to the actual sprint on the queried
 board. No match and multiple-match ambiguity are explicit.
 
-`default_eligible` means **active AND full-name pattern match**. `%YEAR` is four
-ASCII digits, `%NUMBER` one or more, with escaped literals and whole-name anchoring;
+`default_eligible` means **active AND configured Rust regex search match**. A plain
+`SSSD-IDENTITY` searches anywhere; matching is case-sensitive unless inline flags
+change it, and anchors are optional. There are no percent-token substitutions;
 see [configuration](configuration.md). Future/nonmatching sprints remain selectable.
 Exactly one match supplies Overview's initial/reset actual sprint ID. Zero or
 multiple matches leave its Jira results empty with an explicit no-current/choose

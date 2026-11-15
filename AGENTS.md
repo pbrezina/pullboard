@@ -9,7 +9,8 @@ and tests rather than inventing alternate payloads.
 - Application configuration is one YAML file. Secrets are literal YAML values or
   OS keyring references, never environment-variable secrets. Never return or log them.
 - No authentication UI. Local access only; container ports must publish on loopback.
-- All forge adapters are read-only. GitHub uses octocrab; GitLab uses gitlab.
+- All forge adapters are read-only and use the shared bounded Reqwest transport.
+  GitHub GraphQL POSTs are query-only; no forge write interface is permitted.
 - Jira writes occur only after explicit user submission. Read-only test mode returns
   successful, explicitly simulated responses and performs **zero** upstream writes.
 - Attention is per-thread and based exclusively on upstream timestamps. A user's
@@ -28,6 +29,8 @@ and tests rather than inventing alternate payloads.
 ## Layout and workflow
 
 `backend/`: Rust binary/library and tests. `frontend/`: Angular CLI workspace.
+`crates/pullboard-core/`: shared strict YAML/policy and bounded read-only transport.
+`setup/`: disposable Linux x86-64 inline prompt wizard; no server/SQLite/keyring dependencies.
 `api/`: shared contract. `config/`: sanitized YAML example(s).
 `docs/`: mdBook sources. Root Dockerfile/Makefile/CI: delivery tooling.
 
@@ -51,6 +54,14 @@ their assigned directories, preserve other work, and report actual tests and lim
   Current sprints are only pattern-matching active sprints, with end dates and links
   formed by setting selectedSprint on the trusted board_url. Show no-match/ambiguity
   explicitly; all board-returned active/future sprints remain selectable, grouped by state.
+- `sprint_name_pattern` is a bounded Rust regex search, case-sensitive unless inline
+  flags change it; anchors are optional. No percent-token substitutions or legacy modes.
+  Compile once on parsing; matching affects defaults only, never sprint availability.
+- Setup-generated YAML defaults to Live after an explicit Test-mode question; preserve
+  the existing setting on edit. The backend's omitted-property default stays Test.
+  Setup never writes upstream; optional synthetic AI tests need explicit billable consent.
+  `--jira-cloud-url` is an editable tenant-root prefill, never an automatic credential
+  destination change. Tokens are not CLI/environment inputs or terminal/log output.
 - Overview initially/reset selects an actual sprint ID only for one current match;
   zero/multiple matches leave Jira results empty until an explicit filter choice.
   Attention defaults to all including no sprint. No synthetic eligible-sprints option.

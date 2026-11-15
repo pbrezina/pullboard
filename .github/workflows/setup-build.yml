@@ -1,0 +1,72 @@
+name: Build and test setup artifact
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Source commit or release tag to build
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+      CC_x86_64_unknown_linux_musl: musl-gcc
+      AR_x86_64_unknown_linux_musl: ar
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - name: Install musl and C build prerequisites (including rustls aws-lc)
+        run: sudo apt-get update && sudo apt-get install -y build-essential musl-tools cmake ninja-build clang pkg-config binutils
+      - name: Install pinned Rust and musl standard library
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt,clippy --target x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            setup
+            crates/pullboard-core
+          key: setup-musl-1.99.1
+      - run: make test-scripts
+      - name: Format, lint and test shared default features
+        run: |
+          cargo +1.99.1 fmt --manifest-path crates/pullboard-core/Cargo.toml -- --check
+          cargo +1.99.1 clippy --manifest-path crates/pullboard-core/Cargo.toml --locked --all-targets -- -D warnings
+          cargo +1.99.1 test --manifest-path crates/pullboard-core/Cargo.toml --locked
+      - name: Format and lint setup
+        run: |
+          cargo +1.99.1 fmt --manifest-path setup/Cargo.toml -- --check
+          cargo +1.99.1 clippy --manifest-path setup/Cargo.toml --locked --target x86_64-unknown-linux-musl --all-targets -- -D warnings
+      - name: Verify the release runtime dependency boundary
+        run: |
+          cargo +1.99.1 tree --manifest-path setup/Cargo.toml --locked --target x86_64-unknown-linux-musl --edges normal --prefix none --format '{p}' | python3 scripts/check-setup-dependencies.py
+      - name: Build once, then test the release profile on musl
+        run: |
+          cargo +1.99.1 build --manifest-path setup/Cargo.toml --locked --release --target x86_64-unknown-linux-musl
+          cargo +1.99.1 test --manifest-path setup/Cargo.toml --locked --release --target x86_64-unknown-linux-musl
+      - name: Smoke the exact executable and require static linkage
+        run: |
+          binary=setup/target/x86_64-unknown-linux-musl/release/pullboard-setup
+          "$binary" --help
+          "$binary" --nightly --no-color --help
+          if readelf -l "$binary" | grep -q INTERP || readelf -d "$binary" | grep -q NEEDED; then
+            echo '::error::Setup must be a static Linux musl executable.'
+            exit 1
+          fi
+      - name: Package exact tested artifact and record actual sizes
+        run: |
+          sh scripts/package-setup.sh setup/target/x86_64-unknown-linux-musl/release/pullboard-setup "$RUNNER_TEMP/setup-release"
+          cat "$RUNNER_TEMP/setup-release/setup-sizes.txt" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pullboard-setup
+          path: ${{ runner.temp }}/setup-release/*
+          if-no-files-found: error
+          retention-days: 7

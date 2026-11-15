@@ -169,7 +169,7 @@ async fn handler(State(state): State<Arc<Fixture>>, request: axum::extract::Requ
         return Response::new(Body::from_stream(stream::once(async move {
             state.gates[item].acquire().await.unwrap().forget();
             let body = if state.fail.load(Ordering::SeqCst) == item {
-                // A required read with a malformed success body fails all SDKs in
+                // A required read with a malformed success body fails all forges in
                 // the same way, after the test explicitly releases this gate.
                 "private upstream payload".to_owned()
             } else {

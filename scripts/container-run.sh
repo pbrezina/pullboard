@@ -4,7 +4,7 @@ set -eu
 engine=${1:-podman}
 image=${2:-localhost/pullboard:latest}
 config=${3:-}
-port=${4:-8080}
+port=${4:-3333}
 name=${5:-}
 uid=$(id -u)
 gid=$(id -g)

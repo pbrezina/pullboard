@@ -1,18 +1,7 @@
 //! Wire types match api/openapi.json; nullable fields are never omitted.
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub type Time = DateTime<Utc>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Kind {
-    Jira,
-    Github,
-    Gitlab,
-    Codeberg,
-    Forgejo,
-}
+pub use pullboard_core::model::{Kind, Purpose, Time, Workflow};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -316,17 +305,6 @@ impl Default for SyncStatus {
         }
     }
 }
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Workflow {
-    #[serde(deserialize_with = "nullable_status")]
-    pub draft: Option<String>,
-    #[serde(deserialize_with = "nullable_status")]
-    pub ready: Option<String>,
-}
-fn nullable_status<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
-    Option::<String>::deserialize(d)
-}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JiraDefaults {
     pub issue_type: Option<String>,
@@ -384,12 +362,6 @@ pub struct CreateCapabilities {
     pub team: FieldCapability,
     pub sprint: FieldCapability,
     pub blockers: Vec<JiraDiagnostic>,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Purpose {
-    Implementation,
-    Review,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

@@ -26,6 +26,30 @@ one matches; attention starts broad, including unscheduled work. New tickets sta
 
 ## Quick start
 
+On **Linux x86-64**, with rootless Podman, Quadlet and a working systemd user
+session already installed, run the disposable terminal wizard:
+
+```sh
+curl --fail --location --proto '=https' --proto-redir '=https' \
+  https://github.com/pbrezina/pullboard/releases/latest/download/pullboard-setup.sh | sh
+```
+
+This executes publisher-provided code over HTTPS; inspect the launcher first if
+preferred. It verifies the compressed executable's SHA256 before running it, then
+removes the download. Checksums detect corruption, not independent authenticity.
+The wizard asks one question at a time to configure Jira, forges, optional AI and
+a loopback-only service at <http://localhost:3333>. Use arrows to select and Enter
+to accept defaults. Enter tokens only in its masked prompts, never CLI/env.
+New setup asks **Start in Test mode?** (default **No**, therefore **Live**); choose
+Yes to simulate Jira submissions. Setup itself never writes upstream. Existing
+mode settings are preserved on edit.
+
+See the [setup guide](docs/src/setup.md) for prerequisites, token permissions,
+`--nightly`, sharing a `--jira-cloud-url` prefill, protected backups and recovery.
+The launcher/binary are not kept in `~/.local/bin`; rerun setup to edit settings.
+
+### Manual YAML and container option
+
 Create `config/local.yaml` in your editor and replace the example Jira URL, email,
 project, board, team, sprint pattern, and token values with yours. Keep test mode
 on while setting things up: Jira writes are simulated, not sent. Use literal token
@@ -41,7 +65,7 @@ umask 077
 server:
   bind: 0.0.0.0
   port: 8080
-  allowed_origins: [http://localhost:8080, http://127.0.0.1:8080]
+  allowed_origins: [http://localhost:3333, http://127.0.0.1:3333]
   static_directory: /app/frontend
   database: /data/pullboard-cache.sqlite
 
@@ -54,7 +78,7 @@ jira:
   projects: [PROJECT_KEY]
   board_id: 1
   team: Your team
-  sprint_name_pattern: '%YEAR-TEAM-S%NUMBER'
+  sprint_name_pattern: 'TEAM'
 
 forges:
   - id: github
@@ -79,16 +103,20 @@ chmod 600 config/local.yaml
 podman run --pull=always --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
   --userns=keep-id --user "$(id -u):$(id -g)" \
   --tmpfs /data:rw,nosuid,nodev,noexec,size=64m,mode=0700,U \
-  -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:3333:8080 \
   -v "$PWD/config/local.yaml:/app/config.yaml:ro,Z" \
   ghcr.io/pbrezina/pullboard:latest
 ```
 
-Open <http://localhost:8080>. The app is published on loopback only, and its
+Open <http://localhost:3333>. The app is published on loopback only, and its
 cache is temporary. Read the [configuration guide](docs/src/configuration.md)
 before connecting accounts; it covers all settings, credentials, and container
 paths. See the [quickstart and container guide](docs/src/quickstart.md) for more
-run options. Container keyring use requires the
+run options. A rootless Podman [Quadlet](deploy/systemd/pullboard.container) is also
+provided for [graphical-session startup](docs/src/quickstart.md#graphical-session-service-podman).
+It checks for a newer `latest` image at each service start and mounts your existing
+`~/.config/pullboard/config.yaml` read-only. It has no keyring integration.
+Manual container keyring use requires the
 [restricted Secret Service bridge](docs/src/keyring-container.md).
 
 ## Development

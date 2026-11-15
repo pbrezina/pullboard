@@ -14,14 +14,12 @@ bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 futures-util = "0.3"
-gitlab = "0.1905"
 globset = "0.4"
 getrandom = "0.3.4"
 http = "1"
-http-body-util = "0.1"
 httpdate = "1"
+pullboard-core = { path = "../crates/pullboard-core", features = ["api", "native-keyring"] }
 keyring = { version = "3.6", features = ["async-secret-service", "tokio", "crypto-rust", "apple-native", "windows-native"] }
-octocrab = { version = "0.54", default-features = false, features = ["default-client", "rustls", "rustls-ring", "timeout"] }
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "query"] }
 serde = { version = "1", features = ["derive"] }

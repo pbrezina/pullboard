@@ -1,10 +1,10 @@
 # Container-only bind. Publish ONLY on the host loopback interface:
-#   -p 127.0.0.1:8080:8080
+#   -p 127.0.0.1:3333:8080
 # No automatic credential environment variables or full desktop session mounts.
 server:
   bind: 0.0.0.0
   port: 8080
-  allowed_origins: [http://localhost:8080, http://127.0.0.1:8080]
+  allowed_origins: [http://localhost:3333, http://127.0.0.1:3333]
   static_directory: /app/frontend
   database: /data/pullboard-cache.sqlite
 read_only_test_mode: true

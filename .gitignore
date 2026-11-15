@@ -10,6 +10,8 @@
 .env.*
 # Build output
 /backend/target/
+/crates/*/target/
+/setup/target/
 /target/
 /frontend/node_modules/
 /frontend/dist/
@@ -19,3 +21,8 @@
 /frontend/test-results/
 /frontend/playwright-report/
 *.log
+
+# Python caches and bytecode
+__pycache__/
+*.pyc
+*.pyo

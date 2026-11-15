@@ -25,13 +25,14 @@ resolve/draft/create endpoints remain; this is not an alternate payload format.
 | POST | `/api/upstream-issues/ticket-drafts` | `{upstream_issue_id, project_key}` → editable deterministic implementation draft; no AI/writes |
 | POST | `/api/upstream-issues/jira-issues` | Explicit implementation create with `upstream_issue_id` and `expected_mode_revision` → shared created/simulated result |
 
-Example local checks (no credentials in these requests):
+Example local checks against the default container host port (native runs default
+to 8080; no credentials in these requests):
 
 ```sh
-curl --fail http://127.0.0.1:8080/api/health
-curl --fail http://127.0.0.1:8080/api/runtime-mode
-curl --fail http://127.0.0.1:8080/api/sync
-curl --fail -X POST http://127.0.0.1:8080/api/sync \
+curl --fail http://127.0.0.1:3333/api/health
+curl --fail http://127.0.0.1:3333/api/runtime-mode
+curl --fail http://127.0.0.1:3333/api/sync
+curl --fail -X POST http://127.0.0.1:3333/api/sync \
   -H 'Content-Type: application/json' -H 'X-PullBoard-Request: 1' --data '{}'
 ```
 

@@ -230,7 +230,7 @@ async fn targeted_searches_keep_distinct_cursors_and_deduplicate_ids_before_hist
 async fn active_future_sprints_paginate_only_configured_board_keep_foreign_origin() {
     let server = MockServer::start().await;
     let mut c = jira(&server.uri());
-    c.sprint_name_pattern = "%YEAR-Identity-S%NUMBER".into();
+    c.sprint_name_pattern = "Identity".parse().unwrap();
     for board in [12] {
         for (start, id, state, name) in [
             (0, 101, "active", "2026-CORE-S1"),
@@ -268,6 +268,60 @@ async fn active_future_sprints_paginate_only_configured_board_keep_foreign_origi
             .all(|r| r.url.path() == "/rest/agile/1.0/board/12/sprint")
     );
 }
+#[tokio::test]
+async fn regex_search_changes_only_active_default_eligibility_never_sprint_inventory() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/agile/1.0/board/12/sprint"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "values": [
+                {"id":1,"name":"2026-Identity-S1","state":"active"},
+                {"id":2,"name":"2026-IDENTITY-S2","state":"active"},
+                {"id":3,"name":"2026-Identity-S3","state":"future"},
+                {"id":4,"name":"Unrelated","state":"active"}
+            ], "isLast":true,"startAt":0,"maxResults":100
+        })))
+        .expect(5)
+        .mount(&server)
+        .await;
+    for (pattern, expected) in [
+        ("Identity", vec!["1"]),
+        ("(?i)identity", vec!["1", "2"]),
+        ("^Identity$", vec![]),
+        ("missing", vec![]),
+        ("%YEAR-Identity-S%NUMBER", vec![]),
+    ] {
+        let mut config = jira(&server.uri());
+        config.sprint_name_pattern = pattern.parse().unwrap();
+        let adapter = Jira::new(&config, &Upstream::default()).await.unwrap();
+        let sprints = adapter.sprints().await.unwrap();
+        assert_eq!(sprints.len(), 4);
+        assert_eq!(
+            sprints
+                .iter()
+                .filter(|s| s.default_eligible)
+                .map(|s| s.id.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(
+            !sprints
+                .iter()
+                .find(|s| s.state == "future")
+                .unwrap()
+                .default_eligible
+        );
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|r| r.method == "GET")
+    );
+}
+
 #[tokio::test]
 async fn test_mode_returns_no_fabricated_ids_or_upstream_writes() {
     let server = MockServer::start().await;

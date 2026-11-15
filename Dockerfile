@@ -11,6 +11,8 @@ RUN apk add --no-cache build-base cmake pkgconf sqlite-dev
 WORKDIR /build
 COPY backend/Cargo.toml backend/Cargo.lock ./backend/
 COPY backend/src/ ./backend/src/
+COPY crates/pullboard-core/Cargo.toml ./crates/pullboard-core/
+COPY crates/pullboard-core/src/ ./crates/pullboard-core/src/
 COPY api/ ./api/
 WORKDIR /build/backend
 RUN cargo build --release --locked

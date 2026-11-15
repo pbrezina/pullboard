@@ -301,7 +301,7 @@ case-insensitive. Attention badges count unfiltered items; show X of Y with filt
 
 `Board.sprints` and options return **every** active/future sprint returned by the one
 configured board, including foreign-origin and nonmatching names. Context returns
-only active, configured-full-name-pattern matching sprints (`default_eligible: true`)
+only active, configured-regex matching sprints (`default_eligible: true`)
 in `current_sprints`, sorted by case-insensitive name then opaque ID ascending.
 This is display order, not selection priority. The header shows only these configured
 current sprints, not foreign/nonmatching ones (including CORE nonmatches). With multiple
@@ -312,7 +312,7 @@ refer to the board queried, not the origin board or a claim of ownership. Never 
 another board using `originBoardId`. `Sprint.team` is a reliably discovered ownership
 display name, otherwise null; neither configured team, name pattern nor membership
 of a board proves ownership. `team` here is not a ticket team selection key.
-`default_eligible` is exactly active AND full-name pattern match; future sprints are
+`default_eligible` is exactly active AND configured regex search match; future sprints are
 always false. It restricts defaults only, never availability, issue discovery or
 attention. No matching active sprint is an empty `current_sprints` array; display it
 explicitly rather than guessing a sprint. `profile_url` may be null. Board links use
@@ -845,10 +845,14 @@ without echoing their values. Retain Jira Basic-auth `email`, URL and credential
 Forge `id` remains stable; optional `name` defaults to that ID; remove forge `account`
 metadata. No username/account ID is needed in YAML for any service.
 
-Pattern syntax escapes all literals and anchors the whole name. `%YEAR` matches
-exactly four ASCII digits; `%NUMBER` matches one or more ASCII digits, not a runtime
-year/counter substitution. Reject all other/malformed percent tokens. A nonempty
-literal-only pattern is valid. Never interpret input as regex or filter discovered issues.
+`sprint_name_pattern` is always a Rust regular expression, searched anywhere in the
+sprint name, case-sensitive by default. Users can add anchors for whole-name matching
+or inline flags such as `(?i)`. A plain `SSSD-IDENTITY` searches for that substring;
+regex metacharacters retain their regex meaning. No `%YEAR`/`%NUMBER` substitutions,
+prefix modes or legacy interpretation remain. Reject blank/invalid expressions and
+patterns exceeding 4096 UTF-8 bytes; bound compiled regex size and compile once per
+configuration load. Regex matching affects current-sprint defaults only, never the
+inventory, discovered issues, Attention or new-ticket sprint selection.
 Optional `assignee_groups` is an array of nonempty semantic names, deduplicated by
 exact name; absent/empty has the unrestricted project-assignable meaning above.
 
@@ -874,7 +878,7 @@ sync never applies it. This scope intentionally does not add multi-Jira or board
 projects: [IDM]
 board_id: 14585
 team: rhel-idm-sssd-identity
-sprint_name_pattern: '%YEAR-IDM-SSSD-IDENTITY-S%NUMBER'
+sprint_name_pattern: 'SSSD-IDENTITY'
 assignee_groups: [rhel-sst-idm-sssd]
 defaults:
   implementation: {issue_type: Task, assignee: null}
@@ -892,6 +896,18 @@ The numbers/names above are illustrative policy, not verified tenant metadata or
 hardcoded discovery fallbacks. Discovered fields/options/types must be validated
 from upstream read responses, including complete pagination and permissions.
 
+The disposable Linux setup application writes the same YAML schema and installs a
+rootless user Quadlet; it exposes no new REST endpoint. New setup-created files
+default to `read_only_test_mode: false` after presenting an explicit Test-mode choice;
+editing preserves the existing startup setting. This does not change the backend's
+safe default when that YAML property is omitted. Setup discovery never writes to
+Jira or forges. Optional AI inference testing needs explicit consent and synthetic
+content. Tokens are never CLI/environment inputs or summary/log output.
+`--jira-cloud-url` is an editable HTTPS tenant-root prefill, not a second persistent
+configuration source or permission to send retained credentials to a changed site.
+
 Host defaults bind loopback; container YAML may bind `0.0.0.0:8080` with host
-publishing `127.0.0.1:8080:8080`. No forge write capability exists in the REST surface
-or adapter interface. `server.allowed_origins` explicitly defines browser origins.
+publishing `127.0.0.1:3333:8080` by default. No forge write capability exists in the
+REST surface or adapter interface. `server.allowed_origins` explicitly defines
+browser origins; container examples allow localhost and 127.0.0.1 on host port 3333,
+while native defaults remain on port 8080.

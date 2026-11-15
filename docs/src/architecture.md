@@ -12,9 +12,9 @@ fixes. Do not delete unfamiliar work or claim tests you did not run.
 | --- | --- |
 | `api/` | Shared normative wire schemas and behavioral contract |
 | `backend/src/config.rs` | Strict single-YAML config, redacted secrets/keyring resolution |
-| `backend/src/forge/` | Read-only GitHub/octocrab, GitLab/gitlab, Forgejo/Codeberg discovery |
+| `backend/src/forge/` | Read-only GitHub, GitLab, Forgejo/Codeberg discovery and response models |
 | `backend/src/upstream.rs` | Assignment-scoped issue discovery, configured-instance URL validation, deterministic copy text and bounded scoped manual selections |
-| `backend/src/transport.rs` | Bounded authenticated upstream reads, safe URLs/backoff |
+| `backend/src/transport.rs` | Shared Reqwest forge reads, per-instance credentials/cache, bounded bodies, safe URLs/backoff and query-only GitHub GraphQL |
 | `backend/src/request_budget.rs` | Shared origin HTTP admission, separate primary buckets and shared backoff |
 | `backend/src/attention.rs` | Timestamp-based independent stream resolution |
 | `backend/src/jira.rs`, `jira/discovery.rs` | Refresh-time complete scoped choices/policy, Cloud identity/typed metadata/statuses, board sprints, candidate eligibility and explicit write gates |
@@ -75,6 +75,16 @@ as stale. Policy changes take effect only at successful commit, not by combining
 rules with an old pool. Final create uses the latest committed choices rather than
 trusting the client picker; Jira enforces current write permissions.
 Adding a provider method must not expand forge write capability.
+
+Forge adapters own endpoint selection, response models and pagination semantics;
+there are no GitHub/GitLab SDK clients. Their shared Reqwest transport retains
+forge-specific authentication, GitHub API-version headers and enterprise/subpath
+URL mappings. Each configured instance has its own client and ETag cache, while
+request budgets remain shared by origin. Headers publish throttling before body
+consumption so queued callers see header backoff before slow or failing bodies
+finish; bounded GitHub error bodies also detect origin-wide secondary limits.
+Permits cover body reads. Only the bounded REST retry loop retries requests;
+GraphQL is query-only and is not automatically retried.
 
 Source health describes refresh success, not universal API coverage: successful
 Jira/forge sources are `ok` with neutral coverage notes; per-item partial attention

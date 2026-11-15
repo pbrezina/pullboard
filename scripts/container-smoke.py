@@ -94,12 +94,21 @@ try:
         'Origin': 'https://not-local.invalid'}, b'{}')
     assert status == 403
     status, _, _ = request('/api/sync', 'POST', {
+        'Content-Type': 'application/json', 'X-PullBoard-Request': '1',
+        'Origin': 'http://localhost:8080'}, b'{}')
+    assert status == 403
+    for origin in ['http://localhost:3333', 'http://127.0.0.1:3333']:
+        status, _, _ = request('/api/sync', 'POST', {
+            'Content-Type': 'application/json', 'X-PullBoard-Request': '1',
+            'Origin': origin}, b'{}')
+        assert status == 202, (origin, status)
+    status, _, _ = request('/api/sync', 'POST', {
         'Content-Type': 'application/json', 'X-PullBoard-Request': '1'}, b'{}')
     assert status == 202
     status, _, body = request('/api/board')
     board = json.loads(body)
     assert status == 200 and board['issues'] == [] and board['pull_requests'] == []
-    print('PASS: health, static SPA/assets/CSP compatibility, JSON API 404, CSRF/origin rejection, refresh, empty board')
+    print('PASS: health, static SPA/assets/CSP compatibility, JSON API 404, CSRF/origin rejection, port-3333 browser origins, refresh, empty board')
     print('Tested loopback URL: ' + base)
 except Exception:
     if created:

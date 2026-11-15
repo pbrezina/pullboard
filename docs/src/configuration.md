@@ -12,6 +12,8 @@ per-provider secret file or automatic config merging.
   at `frontend/dist/frontend/browser`.
 - `config/container.yaml`: empty integrations, container bind `0.0.0.0`, baked
   assets `/app/frontend`, disposable database `/data/pullboard-cache.sqlite`.
+  The server listens on 8080 inside the container; publish `127.0.0.1:3333:8080`.
+  Its allowed browser origins use host port 3333, unlike the native defaults.
 - `config/example.yaml`: comprehensive **placeholder** reference, not runnable
   real-account credentials. Copy to ignored `config/local.yaml` and edit.
 
@@ -99,18 +101,21 @@ When `jira` is non-null, supply `base_url`, Basic-auth `email`, `token`, and:
 | `projects` | 1–100 unique selected project-key strings, e.g. `[DEV]`; first project's discovered key/name supplies Current project; no project objects |
 | `board_id` | Required positive integer, **no default**; only this board is queried |
 | `team` | Required nonblank semantic default name, **no default**; not sprint ownership |
-| `sprint_name_pattern` | Required nonblank full-name pattern, **no default** |
+| `sprint_name_pattern` | Required nonblank Rust regex search, **no default**, at most 4096 UTF-8 bytes |
 | `team_field_name` | Optional exact semantic field name; defaults to `AssignedTeam`, never a raw field ID |
 | `assignee_groups` | Optional nonblank group names; exact duplicates removed; multiple groups form a union |
 | `defaults` | Optional purpose policies; built-ins are Task/null for both implementation and review |
 | `project_overrides` | Optional selected-project-key map; values accept only `defaults` |
 
-`%YEAR` matches exactly four ASCII digits and `%NUMBER` one or more ASCII digits.
-All other characters are escaped literals; the **entire** sprint name must match.
-There is no current-year substitution or regex syntax. Unknown/malformed percent
-tokens are rejected; nonblank literal-only patterns are valid. Matching controls
-the header's current active sprints and Overview's unique-sprint default only,
-never which active/future sprints are available or a ticket's initial sprint.
+`sprint_name_pattern` is always a Rust regular expression searched anywhere in the
+sprint name. For example, `'SSSD-IDENTITY'` finds that substring, while
+`'^[0-9]{4}-SSSD-IDENTITY-S[0-9]+$'` requires the entire name to match. Matching is
+case-sensitive unless an inline flag such as `(?i)` changes it. Regex metacharacters
+are significant: use `'Team\.v2'` to match a literal dot. Lookaround and backreferences
+are unsupported. Blank, invalid or oversized expressions fail validation; compiled
+size is bounded. There are no `%YEAR`/`%NUMBER` substitutions or legacy modes.
+Matching controls the header's current active sprints and Overview's unique-sprint
+default only, never which active/future sprints are available or a ticket's initial sprint.
 
 Each supplied `defaults.implementation` or `defaults.review` object requires exact
 `issue_type` and explicit `assignee`: implementation accepts `me` or null; review

@@ -1,0 +1,26 @@
+# Rootless user Quadlet; application settings and literal credentials stay in YAML.
+[Unit]
+Description=PullBoard local dashboard
+PartOf=graphical-session.target
+AssertPathExists=%h/.config/pullboard/config.yaml
+
+[Container]
+Image=ghcr.io/pbrezina/pullboard:latest
+Pull=newer
+PublishPort=127.0.0.1:3333:8080
+Volume=%h/.config/pullboard/config.yaml:/app/config.yaml:ro,Z
+UserNS=keep-id
+User=%U
+Group=%G
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+Tmpfs=/data:rw,nosuid,nodev,noexec,size=64m,mode=0700,U
+
+[Service]
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=900
+
+[Install]
+WantedBy=graphical-session.target

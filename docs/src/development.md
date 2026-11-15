@@ -27,14 +27,19 @@ make dev
 ```
 
 Angular binds loopback and proxies `/api` to `127.0.0.1:8080`. The browser's actual
-origin is still 4200: the production 8080 allowlist alone rejects POSTs. Coordinate
-changed dev ports or backend ports with YAML and proxy config. Never add permissive
-CORS or disable request-header checks to bypass this.
+origin is still 4200: neither the native 8080 nor container-host 3333 allowlist
+alone permits these POSTs. Coordinate changed dev ports or backend ports with YAML
+and proxy config. Never add permissive CORS or disable request-header checks to
+bypass this.
 
 ## Verification commands
 
 ```sh
 make test-backend  # cargo test --locked, including mock upstream and contract tests
+make test-core    # shared strict YAML/policy and bounded read transport, default features
+make test-setup   # wizard/discovery/installer tests, no real account or user service
+make test-container  # helper mappings and Quadlet policy; no services/credentials
+make test-scripts  # all offline launcher/packaging/container/delivery tests
 make check        # rustfmt/clippy warnings denied, TS typecheck and Prettier check
 make test-frontend
 make e2e-install  # npx playwright install --with-deps chromium (may need sudo)
@@ -51,6 +56,51 @@ Native Linux builds need a C toolchain, CMake/pkg-config and platform developmen
 dependencies for Rust dependencies. The Alpine build includes build-base, cmake,
 pkgconf and sqlite-dev. TLS uses Rust cryptography; do not add OpenSSL to runtime
 without evidence that it is needed.
+
+### Setup executable and shared core
+
+`backend/`, `setup/` and `crates/pullboard-core/` have independent Cargo manifests,
+lockfiles and target directories, not a root workspace. Shared core defaults have
+no server, SQLite or native keyring dependencies; setup must not enable backend-only
+features or forge SDKs. Normal refresh behavior remains in the backend.
+
+For a Linux x86-64 **static** setup build, install Rust 1.99.1's
+`x86_64-unknown-linux-musl` target plus a C toolchain, musl headers/compiler,
+CMake, pkg-config and binutils. On Debian/Ubuntu, CI installs `build-essential
+musl-tools cmake ninja-build clang pkg-config binutils` (including prerequisites
+for rustls' aws-lc C build). Set `CC_x86_64_unknown_linux_musl=musl-gcc` and
+`CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc` if not auto-detected.
+
+```sh
+make setup
+make check-setup-dependencies
+cargo +1.99.1 test --manifest-path setup/Cargo.toml --locked --release --target x86_64-unknown-linux-musl
+setup/target/x86_64-unknown-linux-musl/release/pullboard-setup --help
+make package-setup
+```
+
+Use `CARGO='cargo +1.99.1'` to pin Make's Cargo command explicitly. `make setup`
+builds only; it does not install files or start services. `make package-setup`
+packages the **already tested** `SETUP_BINARY` without rebuilding, writing assets
+to `target/setup-release` by default (`SETUP_DIST` overrides that directory).
+It uses deterministic gzip headers, records real raw/compressed byte counts and
+creates checksums; synthetic packaging tests are not actual release-size measurements.
+The launcher tests replace downloads through command mocks, use temporary homes/
+directories and PTYs, and never fetch releases or use real credentials/services.
+
+Setup uses inline `inquire` prompts, not a full-screen terminal renderer. Its Rust
+tests drive the linear flow through scripted answers and mock discovery. For real
+arrow-key/search/multiselect, masked-token and cancellation checks, build the setup
+tests with `cargo test --manifest-path setup/Cargo.toml --no-run`, then run
+`python3 setup/tests/inline_smoke.py <wizard-test-executable>` using the emitted
+`wizard-…` executable in `setup/target/debug/deps/`. This opts into an otherwise
+ignored PTY fixture; it uses mock prerequisites/discovery and a private temporary
+HOME (preferring `/tmp/opencode` when available). It never installs or contacts providers.
+
+The disposable installer has no persistent updater. See the [setup guide](setup.md)
+for CLI, token permissions, final confirmation, partial-state recovery and graphical
+session limits. No test result should be represented as a successful real desktop
+installation or proof of live Jira permissions.
 
 The browser suite uses a Python-served **production build** at loopback port 4209
 and mocks the API. It covers accessible controls and flows, not a live Rust server
@@ -188,17 +238,32 @@ behavior require separate validation; do not contact live accounts for a docs ga
 
 ## GitHub Actions
 
-PR CI runs independent Rust formatting/clippy/tests; locked npm typecheck,
+PR CI runs independent backend Rust formatting/clippy/tests; shared-core checks and
+setup formatting/clippy, musl release build/tests, executable help/static-linkage
+checks and offline delivery tests; locked npm typecheck,
 formatting, unit tests, production build and Chromium/axe browser tests; mdBook
 build; and a three-stage Docker build with real image smoke. No app credentials are
 used, including in forks. Workflow default permissions are read-only.
 
-GHCR publication is a separate workflow with package-write permission scoped to
-the publishing job. Pushes to `master` build and publish `:nightly`; published
-releases whose tags start with `v` publish their version tag and `:latest`.
+Image/setup publication share one workflow, reusing the same setup build as PRs.
+Package-write permission is scoped to the image publishing job; content-write
+permission is scoped separately to the setup-asset publication job. Pushes to
+`master` build and publish `:nightly`; published **non-prerelease** releases whose
+tags start with `v` publish their version tag and `:latest`.
 Nightly builds never update `:latest`. Superseded master runs are canceled, and
 publication checks the current master commit so rerunning an older workflow
 cannot replace nightly with an outdated image.
+
+Only after the corresponding image publication succeeds and the setup checks pass,
+the exact tested executable is attached compressed, with launcher, checksums and
+measured size report, to that versioned release or the rolling `nightly` prerelease.
+Nightly publication rechecks master, moves the `nightly` source tag to the built
+commit, and marks the release prerelease/not latest. `GITHUB_TOKEN` release creation
+does not recursively trigger a new workflow; the image job independently excludes
+the non-`v` nightly tag and all prereleases. Asset uploads/registry tags are not one
+atomic transaction: during rolling updates checksum mismatches fail closed and users
+can retry. A failed build/publication can leave the previous setup assets in place;
+job success is not evidence of a newly published asset unless upload completed.
 
 Merely pushing a tag does not publish. The registry path lowercases
 owner/repository. PRs and pushes to other branches never publish, and no workflow

@@ -3,6 +3,7 @@
 [Introduction](README.md)
 
 - [Quickstart and container operation](quickstart.md)
+- [Terminal setup wizard](setup.md)
 - [One YAML configuration](configuration.md)
 - [Credentials and native keyrings](credentials.md)
   - [Restricted Linux container bridge](keyring-container.md)

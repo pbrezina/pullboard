@@ -43,7 +43,7 @@ Ensure `config/local.yaml` uses container paths and a matching keyring reference
 podman run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
   --userns=keep-id --user "$(id -u):$(id -g)" \
   --tmpfs /data:rw,nosuid,nodev,noexec,size=64m,mode=0700,U \
-  -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:3333:8080 \
   -v "$PWD/config/local.yaml:/app/config.yaml:ro,Z" \
   -v "$XDG_RUNTIME_DIR/pullboard-secret-service:/run/pullboard-secret-service:ro,z" \
   -e DBUS_SESSION_BUS_ADDRESS=unix:path=/run/pullboard-secret-service/bus \

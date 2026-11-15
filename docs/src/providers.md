@@ -15,10 +15,15 @@ modes. Do not grant write permissions just because the dashboard can create Jira
 
 | Kind | Base URL | Discovery and practical credential guidance |
 | --- | --- | --- |
-| `github` | `https://api.github.com` (API base, not github.com) | `octocrab`; authored PRs, direct review requests, mentions via search. Fine-grained tokens need access to relevant repos and read access to PRs/issues/metadata; organization approval/SSO may be required. Classic private-repo tokens can require broad `repo` scope, which also grants upstream write rights: prefer fine-grained read-only tokens where possible. |
-| `gitlab` | `https://gitlab.com` or instance root | `gitlab` crate; authored, assigned and reviewer MRs plus accessible account to-dos. Personal token `read_api` is the usual read-only starting point; scopes and project membership vary by server. |
+| `github` | `https://api.github.com` (API base, not github.com) | REST and read-only GraphQL; authored PRs, direct review requests, mentions via search. Fine-grained tokens need access to relevant repos and read access to PRs/issues/metadata; organization approval/SSO may be required. Classic private-repo tokens can require broad `repo` scope, which also grants upstream write rights: prefer fine-grained read-only tokens where possible. |
+| `gitlab` | `https://gitlab.com` or instance root | REST; authored, assigned and reviewer MRs plus accessible account to-dos. Personal token `read_api` is the usual read-only starting point; scopes and project membership vary by server. |
 | `codeberg` | `https://codeberg.org` | Forgejo API; global account-created, assigned, mentioned and review-requested PR search. Choose read-only repository/issue/user scopes supported by that deployment. |
 | `forgejo` | Your instance root | Same adapter as Codeberg, version-dependent API support. No `/user/repos`-only discovery limitation; public contributions outside joined repositories can be found by global account searches. |
+
+All four kinds use the shared bounded Reqwest transport, with separate credentials
+and conditional-response caches per configured instance. Client construction makes
+no upstream requests. Redirects are disabled; GitHub GraphQL POSTs carry queries
+only. Removing forge SDKs does not expand supported API coverage or permissions.
 
 Repository include/exclude globs narrow the discovered result, not upstream scope.
 For enterprise API URLs and older self-hosted versions, inspect source health and
@@ -136,8 +141,10 @@ not neutral coverage notes; they retain last-good data marked stale. See
 ## Jira
 
 The implementation targets Jira Cloud REST API v3 and Agile v1; it is **not** a
-claim of Jira Server/Data Center compatibility. Email plus an API token authenticate
-requests; authenticated `/rest/api/3/myself` discovers identity for mentions/assignment.
+claim of Jira Server/Data Center compatibility. Email plus an **unscoped** API token
+authenticate tenant-root requests; authenticated `/rest/api/3/myself` discovers
+identity for mentions/assignment. The [setup wizard](setup.md#jira-cloud) links token
+creation/help and requires explicit assignee groups rather than silently selecting all users.
 Use credentials allowed to browse configured projects, issues, comments, changelog,
 the configured board, its configuration/sprints, visible fields, create metadata,
 per-type project statuses (`/rest/api/3/project/{key}/statuses`, Browse Projects) and
@@ -152,8 +159,8 @@ when available; see [Jira setup](jira.md).
 For explicit non-simulated actions, Jira permissions must additionally allow issue
 creation, assignment, remote links and the selected transition; sprint follow-up
 requires discovered scrum/Sprint support and EDIT_ISSUES + SCHEDULE_ISSUES. These reads
-do not guarantee a later write succeeds. Scoped token gateways may need different
-routing than a tenant-root basic-auth endpoint; compatibility is not assumed.
+do not guarantee a later write succeeds. Scoped-token gateways require different
+routing than this tenant-root basic-auth flow and are not supported by setup.
 
 Discovery uses two separate server-side JQL queries through
 `/rest/api/3/search/jql` enhanced cursor search:

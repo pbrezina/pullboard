@@ -4,8 +4,9 @@
 # No environment expansion, environment credential sources or secret-file fallbacks.
 # Paths are relative to the server's working directory.
 server:
-  bind: 127.0.0.1                   # container ONLY: 0.0.0.0, publish 127.0.0.1:8080:8080
+  bind: 127.0.0.1                   # container ONLY: 0.0.0.0, publish 127.0.0.1:3333:8080
   port: 8080
+  # For containers, replace port 8080 in browser origins below with host port 3333.
   allowed_origins:                  # exact browser origins; no trailing slash
     - http://localhost:8080
     - http://127.0.0.1:8080
@@ -46,7 +47,8 @@ jira:
   projects: [DEV]                    # YAML order; first configured project supplies header
   board_id: 42                       # required positive ID; only this board is queried
   team: Example Platform             # required semantic default, NOT sprint ownership
-  sprint_name_pattern: '%YEAR-EXAMPLE-S%NUMBER' # required, full-name match for defaults only
+  # Rust regex search, case-sensitive unless (?i); anchors optional. No percent tokens.
+  sprint_name_pattern: 'EXAMPLE'      # required, <=4096 UTF-8 bytes; defaults only
   # Optional exact semantic field name; absent means AssignedTeam. No raw field IDs.
   # team_field_name: AssignedTeam
   # Multiple group names form a union, deduplicated then individually checked for

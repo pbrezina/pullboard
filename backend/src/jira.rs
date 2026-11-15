@@ -19,6 +19,7 @@ use std::{
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 mod discovery;
+mod request_log;
 pub use discovery::Metadata;
 
 pub struct Jira {
@@ -211,6 +212,21 @@ impl Jira {
         params: &[(&str, String)],
         body: Option<&B>,
     ) -> Result<T> {
+        let mut log = request_log::RequestLog::new(&method, path, params);
+        let result = self
+            .request_inner(method, path, params, body, &mut log)
+            .await;
+        log.finish(&result);
+        result
+    }
+    async fn request_inner<T: DeserializeOwned, B: Serialize + ?Sized>(
+        &self,
+        method: Method,
+        path: &str,
+        params: &[(&str, String)],
+        body: Option<&B>,
+        log: &mut request_log::RequestLog<'_>,
+    ) -> Result<T> {
         let mut url = url::Url::parse(&format!(
             "{}/{}",
             self.config.base_url.trim_end_matches('/'),
@@ -235,8 +251,11 @@ impl Jira {
         if let Some(body) = body {
             request = request.json(body);
         }
+        log.waiting();
         let _permit = self.budget.acquire(Bucket::General).await?;
+        log.admitted();
         let response = request.send().await.map_err(|_| Error::upstream())?;
+        log.response(response.status());
         if let Some(error) =
             self.budget
                 .observe_headers(Bucket::General, response.status(), response.headers())
@@ -606,10 +625,7 @@ impl Jira {
     }
     pub async fn sprints(&self) -> Result<Vec<Sprint>> {
         let mut out = vec![];
-        let pattern = self
-            .config
-            .sprint_pattern()
-            .map_err(|_| Error::internal())?;
+        let pattern = self.config.sprint_pattern();
         let board = self.config.board_id;
         let mut start = 0;
         for page in 0..self.limits.max_pages {
@@ -987,8 +1003,21 @@ impl Jira {
         Ok(())
     }
     async fn create_remote(&self, body: &CreateBody) -> Result<Option<String>> {
+        let mut log = request_log::RequestLog::new(&Method::POST, "rest/api/3/issue", &[]);
+        let result = self.create_remote_inner(body, &mut log).await;
+        log.finish(&result);
+        result
+    }
+    async fn create_remote_inner(
+        &self,
+        body: &CreateBody,
+        log: &mut request_log::RequestLog<'_>,
+    ) -> Result<Option<String>> {
+        log.waiting();
         let _permit = self.budget.acquire(Bucket::General).await?;
+        log.admitted();
         let response=self.client.post(format!("{}/rest/api/3/issue",self.config.base_url.trim_end_matches('/'))).basic_auth(&self.config.email,Some(&*self.token)).json(body).send().await.map_err(|_|Error::new(StatusCode::BAD_GATEWAY,"write_outcome_unknown","Jira creation outcome is unknown. Inspect Jira before retrying to avoid duplicate tickets."))?;
+        log.response(response.status());
         if let Some(error) =
             self.budget
                 .observe_headers(Bucket::General, response.status(), response.headers())

@@ -190,6 +190,87 @@ describe('Source health', () => {
     expect(panel.querySelector('.options-heading').textContent).toContain('discovering');
   });
 
+  it.each(['preparing', 'discovering', 'fetching'] as const)(
+    'keeps ticket fetching and project checks independent of options %s',
+    async (phase) => {
+      const f = TestBed.createComponent(SourceHealth);
+      f.componentRef.setInput('sources', board().sources);
+      f.componentRef.setInput('syncing', true);
+      f.componentRef.setInput(
+        'progress',
+        sync().progress.map((p) => ({
+          ...p,
+          phase: 'fetching',
+          completed_items: 8,
+          total_items: 55,
+          finished_at: null,
+          elapsed_ms: 15000,
+        })),
+      );
+      const options = jiraOptionsStatus();
+      options.health = { ...options.health, status: 'error', error: 'Previous refresh failed.' };
+      options.progress = {
+        ...options.progress,
+        phase,
+        finished_at: null,
+        elapsed_ms: 14000,
+        groups: [
+          { name: 'Reviewers', phase: 'completed', completed_items: 50, total_items: 50 },
+          { name: 'Contributors', phase: 'completed', completed_items: 40, total_items: 40 },
+        ],
+        projects: [
+          { name: 'DEV', phase: 'completed', completed_items: 75, total_items: 75 },
+          { name: 'OPS', phase: 'fetching', completed_items: 28, total_items: 75 },
+        ],
+      };
+      f.componentRef.setInput('jiraOptions', options);
+      await f.whenStable();
+      const panel = f.nativeElement.querySelector('.health-panel') as HTMLDetailsElement;
+      const jira = panel.querySelector('[aria-label="Jira health"]')!;
+      const tickets = jira.querySelector('progress[aria-label="Jira evaluated items"]')!;
+      const heading = jira.querySelector('.options-heading')!;
+      expect(panel.open).toBe(false);
+      expect(heading.textContent).toContain(`Choices: ${phase}`);
+      expect(heading.textContent).not.toContain('stale');
+      expect(heading.textContent).toContain('14s');
+      expect(jira.querySelectorAll('.progress-row')).toHaveLength(5);
+      expect(jira.querySelectorAll('.source-completed')).toHaveLength(3);
+      expect(tickets.getAttribute('aria-valuetext')).toBe('fetching: 8 / 55');
+      expect(tickets.closest('.source-completed')).toBeNull();
+      expect(jira.querySelector('.jira-options .progress-time')).toBeNull();
+      expect(jira.querySelectorAll('details')).toHaveLength(1);
+      expect(jira.querySelector('[aria-label="Jira creation metadata and statuses"]')).toBeNull();
+
+      if (phase !== 'fetching') {
+        f.componentRef.setInput('jiraOptions', {
+          ...options,
+          ready: false,
+          health: { ...options.health, status: 'pending', last_success_at: null, error: null },
+          progress: {
+            ...options.progress,
+            projects: options.progress.projects.map((p) => ({
+              ...p,
+              phase: 'completed',
+              completed_items: p.total_items ?? 0,
+            })),
+          },
+        });
+        await f.whenStable();
+        expect(jira.querySelectorAll('.jira-options .source-completed')).toHaveLength(4);
+        expect(heading.textContent).toContain(`Choices: ${phase}`);
+        expect(heading.textContent).not.toContain('ready');
+        expect(heading.querySelector('[title="Creation unavailable"]')).not.toBeNull();
+      }
+
+      f.componentRef.setInput('jiraOptions', jiraOptionsStatus());
+      await f.whenStable();
+      expect(heading.textContent).toContain('Choices: ready');
+      expect(jira.querySelector('.chip')?.textContent).toBe('fetching');
+      expect(tickets.getAttribute('aria-valuetext')).toBe('fetching: 8 / 55');
+      expect(panel.open).toBe(false);
+    },
+  );
+
   it.each([true, false])(
     'shows a brief independent options failure with ready=%s',
     async (ready) => {

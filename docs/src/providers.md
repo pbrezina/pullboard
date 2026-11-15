@@ -152,9 +152,13 @@ user/group discovery. Configured groups need complete group lookup/membership ac
 plus individual project assignability checks. Absent/empty groups need full paginated
 `/rest/api/3/users/search` access plus the same checks; directory permissions may be
 broader and request cost is pages plus one request per candidate, not one capped
-assignable-search scan. Metadata/groups follow Jira ticket work, and exact eligibility
-checks run last, after all source card fetching and creation discovery finish, through
-one bounded project/account queue. These checks occur during normal refresh;
+assignable-search scan. After verified identity, tickets/metadata/groups may overlap.
+Exact eligibility waits only for complete deduplicated candidates, not metadata or
+tickets; one owned bounded project/account queue allows one request/item in flight
+while any card source is unfinished, then expands to existing item concurrency once
+all card attempts terminate, including failure/backoff. Shared per-origin HTTP bounds
+remain authoritative; metadata/groups may compete, with no preemption/latency guarantee.
+These checks occur during normal refresh;
 options/drafts/create use the committed complete options generation without repeating
 them. Discovery/eligibility failures fail options closed without failing committed
 Jira tickets; complete same-scope last-good choices stay usable with independent stale

@@ -86,8 +86,8 @@ individually for project assignability with
 `GET /rest/api/3/user/assignable/search?project=...&accountId=...`.
 Configured groups do **not** use broad capped assignable-search range pagination or
 an all-user directory scan. Repeated group names and overlapping accounts are
-deduplicated; each candidate is checked once per project during the refresh's final
-eligibility batch, not on every editor request.
+deduplicated; each candidate is checked once per project through the refresh's bounded
+eligibility queue, not on every editor request.
 
 With absent or empty groups, the backend fully paginates plural
 `GET /rest/api/3/users/search`, then applies the same individual checks. It advances
@@ -117,14 +117,18 @@ drafts and create do not repeat those group/user checks. Rate limits and page/re
 bounds are real operational limits. A small observed group does not prove pagination
 or permissions universally.
 
-Creation metadata/status and group discovery follow Jira ticket work and may overlap
-remaining forge reads. Eligibility is a **standalone lowest-priority batch**, starting
-only after all sources' card fetching has terminated and creation discovery is complete.
-One bounded owned/cancellable queue spans project/account pairs; it does not finish
-one project before starting the next. All stages share the existing per-origin HTTP
-cap (default 4, configurable in YAML), item bounds, pagination, response/time limits
-and backoff. Nested work does not multiply the cap. No hybrid/bulk API work or raised
-cap is part of this change, and no measured speedup is claimed.
+After one verified Jira identity, tickets, creation metadata/statuses and groups may
+load concurrently. Eligibility waits **only for complete deduplicated membership
+candidates**, or complete human inventory without groups, not metadata or tickets.
+One owned/cancellable bounded project/account queue allows at most one eligibility
+request/item in flight while any configured card source is queued, preparing,
+discovering, fetching or publishing. It dynamically expands to existing configured
+item concurrency after all card attempts terminate, including failure/skipped backoff.
+Metadata/groups may compete; this is not preemption or a fixed-latency promise, and
+HTTP cap 1 naturally serializes reads. The existing shared per-origin HTTP cap
+(default 4, configurable in YAML), item bounds, pagination, response/time limits and
+backoff remain authoritative. No new setting, multiplied/raised cap, hybrid/bulk API
+or measured speedup is part of this change.
 
 Inside **Source health**, Jira's compact group/project rows share one options phase
 and elapsed time; there is no separate metadata progress panel. Group membership
@@ -132,8 +136,11 @@ stays indeterminate until full pagination and deduplication complete, then shows
 unique member totals. Per-project eligibility
 counts finished checks, **both eligible and ineligible**, not people retained. Totals
 are unknown until the complete candidate inventory is known. A project finishing its
-checks does not expose a partial pool or make the full options generation ready. See
-[options progress](security-cache.md#ticket-first-scheduling-and-options-progress).
+checks does not expose a partial pool or make the full options generation ready.
+Options preparing/discovering may overlap project checks or wait for metadata after
+all projects complete. Fetching means metadata/groups complete with checks outstanding,
+not a card barrier. See
+[options progress](security-cache.md#ticket-favoring-concurrency-and-options-progress).
 
 ## Refresh-time choices and freshness
 
@@ -141,8 +148,9 @@ Normal Jira refresh fully discovers every configured project's permitted assigne
 all allowed types' metadata/capabilities/team choices and statuses, and all board
 active/future sprints. Choices, their **own sprint snapshot** and effective group/default
 policy publish as one complete atomic options generation in ephemeral SQLite,
-independently of Jira cards. Validation never merges newer board sprints or policy
-with an old pool. Opening/searching a dialog,
+independently of Jira cards, possibly before tickets. Verified prerequisites/sprint
+reads are reused without waiting for ticket hydration. Validation never merges newer
+board sprints or policy with an old pool. Opening/searching a dialog,
 drafting and create validation consume that cache, never start metadata/group/user
 discovery. AI generation and explicit live write/follow-up requests retain their
 separate purposes.

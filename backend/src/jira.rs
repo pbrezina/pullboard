@@ -8,7 +8,11 @@ use crate::{
     request_budget::{Bucket, RequestBudget},
     transport::{bounded_body, http_client},
 };
-use futures_util::{StreamExt, TryStreamExt, stream};
+use futures_util::{
+    FutureExt, StreamExt, TryFutureExt, TryStreamExt,
+    future::{BoxFuture, Shared},
+    stream::{self, FuturesUnordered},
+};
 use http::{HeaderValue, Method, StatusCode};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -16,7 +20,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 use zeroize::Zeroizing;
 mod discovery;
 mod request_log;
@@ -29,10 +33,7 @@ pub(crate) struct TicketPreparation {
     sprint_field: Option<String>,
     project: Option<Project>,
 }
-pub(crate) struct ChoiceDiscovery {
-    metadata: Metadata,
-    candidates: BTreeSet<String>,
-}
+pub(crate) type SharedRead<'a, T> = Shared<BoxFuture<'a, Result<Arc<T>>>>;
 
 pub struct Jira {
     pub config: JiraConfig,
@@ -333,22 +334,30 @@ impl Jira {
     ) -> Result<SourceData> {
         let result: Result<SourceData> = async {
             let identity = self.identity().await?;
-            let preparation = self.prepare_tickets().await?;
-            let mut data = self
-                .read_tickets(identity.clone(), &preparation, progress)
-                .await?;
-            let choices = self
-                .discover_choices(
-                    &identity,
-                    Some(&preparation),
-                    Some(&data.sprints),
-                    crate::sync::ChoiceReporter::default(),
-                )
-                .await?;
-            data.jira_choices = Some(
-                self.check_choices(choices, crate::sync::ChoiceReporter::default())
-                    .await?,
+            // Complete local SQLite work before fallible sibling cancellation.
+            let preparation = Arc::new(self.prepare_tickets().await?);
+            let shared_preparation = futures_util::future::ready(Ok(preparation.clone()))
+                .boxed()
+                .shared();
+            let sprints = self.sprints().map_ok(Arc::new).boxed().shared();
+            let (cards, receiver) = watch::channel(1);
+            let tickets = async {
+                let result = self
+                    .read_tickets(identity.clone(), &preparation, sprints.clone(), progress)
+                    .await;
+                cards.send_replace(0);
+                result
+            };
+            let choices = self.discover_choices(
+                &identity,
+                shared_preparation,
+                sprints.clone(),
+                crate::sync::ChoiceReporter::default(),
+                receiver,
             );
+            let (data, choices) = tokio::join!(tickets, choices);
+            let mut data = data?;
+            data.jira_choices = Some(choices?);
             Ok(data)
         }
         .await;
@@ -394,18 +403,19 @@ impl Jira {
         &self,
         identity: Identity,
         preparation: &TicketPreparation,
+        sprints: SharedRead<'_, Vec<Sprint>>,
         progress: crate::sync::Progress,
     ) -> Result<SourceData> {
         let mut data=SourceData{identity:Some(identity.clone()),jira_project:preparation.project.clone(),coverage_notes:vec!["Jira discovery uses separate fully paginated enhanced JQL searches for assigned issues in configured projects and description/comment mention candidates across all accessible projects, regardless of assignee. Only status Closed is excluded, not resolution or Done category; there is no date cutoff or unfiltered fallback. Search indexing, permissions and deleted history may omit mentions. Explicit ADF mentions and upstream replies determine attention. Mention timers use current description/comment revision timestamps when edit history is unavailable; own replies clear at comment creation timestamps.".into()],..Default::default()};
         let (sprints, (issues, links)) = tokio::try_join!(
-            self.sprints(),
+            sprints,
             self.read_issues(
                 &identity.account_id,
                 preparation.sprint_field.as_deref().unwrap_or_default(),
                 progress
             )
         )?;
-        data.sprints = sprints;
+        data.sprints = (*sprints).clone();
         data.issues = issues;
         data.issue_weblinks = links;
         Ok(data)
@@ -413,103 +423,118 @@ impl Jira {
     pub(crate) async fn discover_choices(
         &self,
         identity: &Identity,
-        preparation: Option<&TicketPreparation>,
-        sprints: Option<&[Sprint]>,
+        preparation: SharedRead<'_, TicketPreparation>,
+        sprints: SharedRead<'_, Vec<Sprint>>,
         progress: crate::sync::ChoiceReporter,
-    ) -> Result<ChoiceDiscovery> {
+        cards: watch::Receiver<usize>,
+    ) -> Result<Metadata> {
         progress.discovery(&self.group_names(), &self.config.projects);
         let started = std::time::Instant::now();
         let metadata = async {
-            match preparation {
-                Some(preparation) => {
-                    self.read_metadata(&identity.account_id, &preparation.fields)
-                        .await
-                }
-                None => {
-                    self.read_metadata(&identity.account_id, &self.visible_fields().await?)
-                        .await
-                }
-            }
+            let preparation = preparation.await?;
+            let (mut metadata, sprints) = tokio::try_join!(
+                self.read_metadata(&identity.account_id, &preparation.fields),
+                sprints
+            )?;
+            metadata.sprints = (*sprints).clone();
+            progress.metadata_completed();
+            Ok::<_, Error>(metadata)
         };
         let candidates = async {
-            match self.group_members_progress(progress.clone()).await? {
+            let candidates = match self.group_members_progress(progress.clone()).await? {
                 Some(members) => Ok(members),
                 None => self.all_human_accounts().await,
-            }
+            }?;
+            self.check_choices(candidates, progress.clone(), cards)
+                .await
         };
-        let sprints = async {
-            match sprints {
-                Some(sprints) => Ok(sprints.to_vec()),
-                None => self.sprints().await,
-            }
-        };
-        let (mut metadata, candidates, sprints) = tokio::try_join!(metadata, candidates, sprints)?;
-        metadata.sprints = sprints;
+        // These branches own only options work. An options failure cancels its
+        // sibling queue, never the independently polled card branch.
+        let (mut metadata, assignees) = tokio::try_join!(metadata, candidates)?;
+        metadata.assignees = assignees;
         tracing::info!(
             elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             "Jira creation discovery finished"
         );
-        Ok(ChoiceDiscovery {
-            metadata,
-            candidates,
-        })
+        Ok(metadata)
     }
-    pub(crate) async fn check_choices(
+    async fn check_choices(
         &self,
-        discovery: ChoiceDiscovery,
+        candidates: BTreeSet<String>,
         progress: crate::sync::ChoiceReporter,
-    ) -> Result<Metadata> {
-        let ChoiceDiscovery {
-            mut metadata,
-            candidates,
-        } = discovery;
+        mut cards: watch::Receiver<usize>,
+    ) -> Result<BTreeMap<String, Vec<JiraAssignee>>> {
         let total = u64::try_from(candidates.len()).map_err(|_| discovery::failed())?;
         if total > u64::from(self.limits.max_pages) * u64::from(self.limits.page_size) {
             return Err(discovery::failed());
         }
         progress.eligibility(total);
-        for key in &self.config.projects {
-            metadata.assignees.insert(key.clone(), vec![]);
-        }
+        let mut assignees: BTreeMap<_, Vec<JiraAssignee>> = self
+            .config
+            .projects
+            .iter()
+            .map(|key| (key.clone(), vec![]))
+            .collect();
         let started = std::time::Instant::now();
         // Account-major order interleaves projects in one bounded queue. No nested
         // project batches, detached tasks, or optimistic expected assignability.
         let projects = self.config.projects.clone();
-        let pairs = candidates.into_iter().flat_map(move |account| {
+        let mut pairs = candidates.into_iter().flat_map(move |account| {
             projects
                 .clone()
                 .into_iter()
                 .map(move |key| (key, account.clone()))
         });
-        let mut checks = stream::iter(pairs)
-            .map(|(key, account)| {
+        let mut checks = FuturesUnordered::new();
+        let mut expanded = *cards.borrow_and_update() == 0;
+        let mut exhausted = false;
+        loop {
+            let limit = if expanded {
+                self.limits.max_concurrent_items
+            } else {
+                1
+            };
+            while checks.len() < limit && !exhausted {
+                let Some((key, account)) = pairs.next() else {
+                    exhausted = true;
+                    break;
+                };
                 let progress = &progress;
-                async move {
+                checks.push(async move {
                     progress.project_started(&key);
                     let user = self.check_assignee(&key, &account).await?;
                     progress.project_checked(&key);
                     Ok::<_, Error>((key, user))
+                });
+            }
+            if checks.is_empty() {
+                break;
+            }
+            let check = tokio::select! {
+                check = checks.next() => check.expect("nonempty eligibility queue"),
+                changed = cards.changed(), if !expanded => {
+                    // Closed means the scoped guards were dropped; disabling this
+                    // branch avoids a ready-loop during cancellation/shutdown.
+                    expanded = changed.is_err() || *cards.borrow_and_update() == 0;
+                    continue;
                 }
-            })
-            .buffer_unordered(self.limits.max_concurrent_items);
-        while let Some(check) = checks.next().await {
+            };
             let (key, user) = check?;
             if let Some(user) = user {
-                metadata
-                    .assignees
+                assignees
                     .get_mut(&key)
                     .ok_or_else(discovery::failed)?
                     .push(user);
             }
         }
-        for pool in metadata.assignees.values_mut() {
+        for pool in assignees.values_mut() {
             sort_assignees(pool);
         }
         tracing::info!(
             elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             "Jira eligibility batch finished"
         );
-        Ok(metadata)
+        Ok(assignees)
     }
     async fn read_issues(
         &self,

@@ -20,8 +20,11 @@ one matches; attention starts broad, including unscheduled work. New tickets sta
 Refresh publishes each complete source's cards as soon as ready, without waiting
 for slower sources or Jira creation choices. Jira choices have separate health and
 readiness: stale complete choices remain usable, while first-run creation waits for
-verified complete discovery. The existing shared HTTP limit still defaults to four
-requests per origin, configurable in YAML. See [refresh and freshness](docs/src/security-cache.md).
+verified complete discovery. After identity verification, Jira tickets, creation
+metadata and groups can load concurrently; eligibility waits only for complete
+membership candidates and is limited to one in-flight check while any card source is
+unfinished. The existing shared HTTP limit still defaults to four requests per origin,
+configurable in YAML. See [refresh and freshness](docs/src/security-cache.md).
 
 ## Supported forges
 

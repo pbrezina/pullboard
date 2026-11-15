@@ -16,9 +16,10 @@
 | Unknown total / empty bar | `?` displays a `null` total: inventory is not yet known, not zero; active work is indeterminate. `0 / 0` means genuinely empty completed work, not a fabricated percentage. |
 | Fetch complete but old cards visible | `publishing` waits for that source's own atomic transaction, not slower sources or options. Do not infer publication from a full item bar; check phase, `board_revision` and live sync health. A source publication failure preserves its old data without undoing another source's commit. |
 | Source completed but refresh still running | Expected: source counters/duration freeze at its own commit; other sources or Jira options may still be active. Compare read-stage, source-commit and job-finished logs, not just total job time. |
-| Fresh Jira tickets but creation unavailable | Tickets/current sprints/real first project publish before options. Creation waits for a verified complete options generation; inspect `jira_options.ready`, health and metadata/group/project progress, not ticket health. |
+| Fresh Jira tickets but creation unavailable | Tickets/current sprints/real first project publish without waiting for options; either domain may finish first. Creation waits for a verified complete options generation; inspect `jira_options.ready`, health and metadata/group/project progress, not ticket health. |
 | Group progress stays indeterminate | Expected until every membership page and deduplication finish. Partial pages cannot advertise a complete pool; final group counts are unique members. Overlapping groups are deduplicated before project checks. |
 | Project checks exceed eligible assignees | Eligibility counts finished project/account checks, including negative results. Totals become known only after complete candidate discovery; a finished project alone does not make options ready. |
+| Project checks run while options are discovering / all projects completed but options unavailable | Expected after complete membership discovery: project checks need not wait for metadata or tickets. Preparing/discovering may overlap checks or wait for metadata after all projects finish. Fetching means metadata/groups complete with checks outstanding, not an all-card barrier. |
 | Failed/backoff progress with previously green cards | Live `/api/sync` health can fail before the retained board changes. Inspect the error/retry deadline; old snapshot health must not mask the current failure. |
 | Independent accounts back off together | Entries on the same origin deliberately share concurrency and conservative rate-limit state, even with different credentials. GitHub primary core/search/GraphQL buckets are separate; secondary backoff is origin-wide. |
 | GitHub batches smaller than configured | Effective size is `min(github_batch_size, max_concurrent_items)`; only explicit resource/complexity errors split further. Auth, permission, read and rate-limit errors fail rather than falling back. |
@@ -36,7 +37,7 @@
 | Wrong/unavailable Current project | It is the first configured Jira project's discovered key/name, not a forge draft override, hardcoded IDM or later-project fallback. Check YAML order and Jira discovery health. |
 | Foreign sprint / unknown ownership | Expected when returned by the configured board. No other board is queried and configured team does not prove ownership. |
 | Identity/project list empty after startup | Check pending/error health. Identity comes from /myself or /user, independently of issue discovery. The first YAML project's real key/name can arrive early with empty issue types until options commit; a later project is never substituted. Project visibility is not creation readiness; no configured account ID is needed. |
-| Jira discovery takes many assignee requests | Metadata/groups follow Jira ticket work. Complete groups form a deduplicated union (missing/empty groups fully enumerate plural /users/search). Final exact accountId checks use one bounded project/account queue only after all card fetching and creation discovery finish. Verify permissions/bounds; no partial/optimistic fallback, raised cap or hybrid/bulk API. Editor requests do not repeat discovery. |
+| Jira discovery takes many assignee requests | After verified identity, tickets/metadata/groups may overlap. Exact accountId checks wait only for the complete deduplicated group union (or full human inventory via plural /users/search without groups), not metadata/tickets. One bounded project/account queue permits one in-flight request/item while any card source is unfinished, expanding to existing item concurrency after all card attempts terminate, including failure/backoff. Shared HTTP caps remain authoritative; no partial/optimistic fallback, raised cap or hybrid/bulk API. Editor requests do not repeat discovery. |
 | Choices stale / group-policy change not visible | An options failure retains the complete same-scope last-good generation, including its own sprints and effective policy, as usable but stale. Use Refresh Jira choices or normal refresh; new policy applies only on successful atomic options publication. Inspect independent `jira_options.health`/`ready` and options last-success, not ticket health. |
 | Options/draft/create not ready or discovery failed | No verified complete scoped initial options generation exists. Check `jira_options` health/readiness and refresh permissions/pagination; no partial pool or optimistic assignment. A stale complete generation remains usable; an options-only failure never fails fresh tickets. |
 | Reviewer missing / all tickets unassigned | Self is excluded for review; eligible self remains available but unselected for implementation. All editors start Unassigned. People must be active humans, in the configured group union (if any), and project-assignable in the committed cache. Null requires unassigned capability. |
@@ -76,8 +77,10 @@ switch. Diagnostics omit raw upstream URLs, query/payload contents and credentia
 - `source snapshot committed` reports that source's transaction/revision and frozen
   attempt duration. `first source card snapshot committed` reports job-relative time
   to the first complete successful source publication, even if the source is empty.
-- `Jira creation discovery finished` and `Jira eligibility batch finished` report
-  separate stage durations on success. `Jira options domain committed` includes
+- `Jira eligibility batch finished` reports successful queue duration, including
+  constrained/expanded scheduling and request waits. `Jira creation discovery finished`
+  covers the overlapping metadata and candidate/check branches together; these are
+  not additive sequential stage durations. `Jira options domain committed` includes
   independent options-attempt `elapsed_ms`, `job_elapsed_ms`, `ready`, `succeeded`
   and revision. A retained stale generation can be ready when the attempt failed;
   the log is not proof of fresh successful options unless `succeeded` is true.
@@ -94,12 +97,14 @@ switch. Diagnostics omit raw upstream URLs, query/payload contents and credentia
 
 Up to four sources can read concurrently and publish complete snapshots independently;
 Jira options publish separately. Compare time to first cards, options-ready time and
-total job duration, rather than treating them as the same event. Completed ticket
-timing never includes later eligibility; options attempt timing includes any barrier
-wait. Job success requires every configured ticket source and enabled options to
-succeed, not merely one fresh source. Observed performance depends on the workload
-and provider; this scheduling change has no measured speedup claim, and bounded concurrency does not
-guarantee no upstream throttling. Honor health/backoff and adjust only the
+total job duration, rather than treating them as the same event. Ticket timing freezes
+at its own commit, not when overlapping eligibility finishes; options attempt timing
+includes prerequisite/queue waits. Job success requires every configured ticket source
+and enabled options to succeed, not merely one fresh source. Observed performance depends on the workload
+and provider; this scheduling change has no measured speedup claim. Metadata/groups
+may compete, transport fairness/backoff apply, and HTTP cap 1 serializes reads: there
+is no preemption or fixed-latency guarantee. Bounded concurrency does not guarantee
+no upstream throttling. Honor health/backoff and adjust only the
 [single-YAML limits](configuration.md#controls), not credentials or hidden
 environment overrides to bypass quotas.
 

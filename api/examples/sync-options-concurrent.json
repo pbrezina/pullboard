@@ -1,0 +1,30 @@
+{
+  "state": "syncing",
+  "started_at": "2026-11-09T12:00:00Z",
+  "finished_at": null,
+  "last_success_at": null,
+  "board_revision": 0,
+  "sources": [
+    {"source_id": "jira", "name": "Work Jira", "kind": "jira", "status": "pending", "last_success_at": null, "last_attempt_at": "2026-11-09T12:00:00Z", "error": null, "retry_at": null, "coverage_notes": []},
+    {"source_id": "work-github", "name": "Work GitHub", "kind": "github", "status": "pending", "last_success_at": null, "last_attempt_at": "2026-11-09T12:00:00Z", "error": null, "retry_at": null, "coverage_notes": []}
+  ],
+  "progress": [
+    {"source_id": "jira", "phase": "fetching", "completed_items": 8, "total_items": 55, "started_at": "2026-11-09T12:00:00Z", "finished_at": null, "elapsed_ms": 15000},
+    {"source_id": "work-github", "phase": "fetching", "completed_items": 3, "total_items": null, "started_at": "2026-11-09T12:00:00Z", "finished_at": null, "elapsed_ms": 15000}
+  ],
+  "jira_options": {
+    "ready": false,
+    "health": {"source_id": "jira", "name": "Work Jira", "kind": "jira", "status": "pending", "last_success_at": null, "last_attempt_at": "2026-11-09T12:00:01Z", "error": null, "retry_at": null, "coverage_notes": []},
+    "progress": {
+      "phase": "discovering", "started_at": "2026-11-09T12:00:01Z", "finished_at": null, "elapsed_ms": 14000,
+      "groups": [
+        {"name": "example-group-a", "phase": "completed", "completed_items": 50, "total_items": 50},
+        {"name": "example-group-b", "phase": "completed", "completed_items": 40, "total_items": 40}
+      ],
+      "projects": [
+        {"name": "IDM", "phase": "completed", "completed_items": 75, "total_items": 75},
+        {"name": "RHEL", "phase": "fetching", "completed_items": 28, "total_items": 75}
+      ]
+    }
+  }
+}

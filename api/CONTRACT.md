@@ -1,4 +1,4 @@
-# PullBoard REST contract — v1.5.0 (ticket-first independent publications)
+# PullBoard REST contract — v1.6.0 (ticket-favoring concurrent refresh)
 
 The normative machine-readable schemas are in [openapi.json](openapi.json).
 All paths are same-origin under `/api`, JSON uses `snake_case`, IDs are opaque strings
@@ -6,13 +6,16 @@ All paths are same-origin under `/api`, JSON uses `snake_case`, IDs are opaque s
 explicitly as `null`. Arrays are always present (possibly empty). Unknown request
 fields are rejected. Error responses use `ErrorResponse` even for routing, extraction,
 validation and upstream errors. No endpoint returns secrets or raw upstream errors.
-This extends v1.4.0 with independent per-source card publications, a shared committed
-`SyncStatus.board_revision`, and separate nullable `SyncStatus.jira_options` readiness,
-health and progress. Jira options remain a complete atomic generation, no longer
-coupled to card publication. Existing create request fields, including name-based
-`status`, are unchanged. Runtime-mode rules remain mandatory. Unknown query keys
-are also rejected. A nullable property is still required unless explicitly documented
-otherwise.
+This extends v1.5.0 with concurrent ticket, creation-metadata and group discovery,
+and membership-gated eligibility that favors unfinished card work. The minor version
+bump records new valid progress-state combinations, not new fields, phases or counters:
+all wire shapes remain unchanged. Independent per-source card publications, shared
+committed `SyncStatus.board_revision`, and separate nullable `SyncStatus.jira_options`
+readiness, health and progress remain. Jira options remain a complete atomic generation,
+uncoupled from card publication, and may commit before tickets. Existing create request
+fields, including name-based `status`, are unchanged. Runtime-mode rules remain
+mandatory. Unknown query keys are also rejected. A nullable property is still required
+unless explicitly documented otherwise.
 
 ## Endpoints
 
@@ -243,11 +246,17 @@ this is not a partial refresh, and neither number is an attention count.
   At idle/reset both arrays are empty; populate known rows as discovery starts, never
   use rows as fake configured sources. No overall options percentage is defined.
 - `preparing`/`discovering` cover creation metadata/capabilities/statuses/policy and
-  complete group membership pagination; `fetching` means the final eligibility batch;
+  complete group membership pagination and required sprint prerequisites. These phases
+  may overlap project eligibility checks once the complete deduplicated membership
+  candidate population is known, even while metadata is still loading. They may have
+  known project totals and queued/fetching/completed project rows; all projects may
+  already be completed while waiting for metadata. `fetching` means metadata/groups
+  discovery is complete with outstanding eligibility, **not** an all-tickets barrier;
   `publishing` means waiting for/performing the independent options transaction;
   `completed` means that full generation committed. No metadata/groups/eligibility
   counters are added to ticket `SourceProgress`. Metadata may be indeterminate without
-  invented metadata totals; phase and actual duration are sufficient.
+  invented metadata totals; phase and actual duration are sufficient. Phase names are
+  current work descriptions, not a promise of sequential, mutually exclusive branches.
 - Group rows stay indeterminate (`completed_items: 0`, `total_items: null`) while
   pagination/dedup is incomplete. Only full verified membership discovery reports
   `completed` with equal known counts of unique discovered members, including 0/0.
@@ -262,33 +271,67 @@ this is not a partial refresh, and neither number is an attention count.
   check never increments completed. Known total is >= completed. Completed rows have
   equal totals. A queued project may already have a known workload while waiting for
   the bounded eligibility queue; queued rows always have zero completed checks.
+  Every group row must be completed before any project has a known total or starts
+  eligibility; do not check candidates from partial group pages. With no group rows,
+  the equivalent complete deduplicated candidate discovery is still mandatory. A
+  `fetching` top phase has at least one outstanding queued/fetching project check;
+  its project totals are all known. Project rows describe workloads, not requests
+  currently in flight: several projects may be fetching with only one queue item active.
   Rows can complete before the whole generation commits but do not
   confer readiness. No optimistic expected assignability or unverified pool exposure.
 
-Verify identity once per source attempt; run bounded independent assigned/mention
-searches and sprint reads, deduplicate the full inventory, and hydrate concurrently.
+Verify identity once per source attempt. After Jira's shared identity is verified,
+ticket work (bounded independent assigned/mention searches, sprint reads, full inventory
+deduplication, then concurrent hydration), creation metadata/status/policy discovery,
+and complete group discovery **may run concurrently**. Eligibility waits **only for the
+complete deduplicated membership candidate population**, not tickets or metadata.
+When no groups are configured, finish the equivalent complete candidate discovery
+before eligibility. Never begin from partial membership pages or optimistic candidates.
+
+Use **one owned bounded queue across project/account pairs**, not sequential project
+batches or one independent queue per project/group. While **any configured source's card
+work is queued, preparing, discovering, fetching or publishing**, allow at most **one
+eligibility request/item in flight** across that queue. After **all** configured source
+card attempts terminate (`completed`, `failed` or `backoff`, including skipped backoff),
+automatically expand eligibility to the existing configured item concurrency. Waiting
+for publication still counts as unfinished card work. Metadata/group completion does
+not trigger this expansion, and card completion is not a gate to starting eligibility.
+Project-row phases/counts do not expose in-flight concurrency; the one-item rule is
+a runtime scheduling invariant, not a new counter inferable from a status poll.
+
+This is ticket-favoring concurrency, **not preemption or a guaranteed fixed card
+latency**. Metadata/group reads may compete with card reads; shared transport queue
+fairness and backoff still apply. An HTTP cap of 1 naturally serializes requests.
 Publish complete Jira cards, Board.sprints and Context.current_sprints without waiting
 for creation discovery. Each forge likewise publishes as ready without waiting for Jira.
-After Jira ticket work, bounded creation metadata/status/group discovery may overlap
-remaining forge card fetching. The lowest-priority eligibility batch starts only
-**after all sources' card fetching has terminated and creation metadata/groups are
-complete**; do not interleave eligibility with those reads. Use one bounded owned queue
-across project/account pairs, not sequential project batches. A failed/backoff ticket
-source is terminal for this scheduling barrier; it does not automatically fail options.
-If Jira identity or an options prerequisite is unavailable, fail/skip options honestly,
+Options may publish **before** Jira/forge cards, but only after their own complete
+metadata/status/policy, eligibility and active/future sprint snapshot are ready. Share
+verified prerequisites and the same complete sprint read where practical, without
+making options wait for ticket hydration; sharing reads never couples domain commits
+or mixes a retained generation with newer display sprints. A failed shared prerequisite
+is a failure for each domain that requires it, never silently replaced with empty data.
+
+Branch-specific errors must not cancel the other domain's work or undo its commit:
+metadata/status errors must not cancel tickets, and ticket errors must not cancel
+otherwise viable options discovery/publication. Shared identity/prerequisite failures
+or upstream backoff can legitimately affect both; propagate these honestly. If Jira
+identity or an options prerequisite is unavailable, fail/skip options honestly,
 retaining only compatible last-good choices. An upstream Jira retry deadline is still
 honored across both domains: separate health is not permission to bypass transport backoff.
 
 All independent/nested work shares the existing bounded per-origin HTTP transport,
 timeouts, response-size limits, complete pagination and backoff. Request/item concurrency
 defaults are 4; actual YAML may differ and is not assumed inspected. Never multiply
-nested caps or silently increase them. Optional hybrid eligibility/bulk APIs are out
-of scope; exact verified eligibility and complete discovery requirements are unchanged.
+nested caps or silently increase them, and do not add a YAML concurrency setting.
+The shared HTTP cap remains authoritative even after eligibility expands. Optional
+hybrid eligibility/bulk APIs are out of scope; exact verified eligibility and complete
+discovery requirements are unchanged.
 
 Options timing is process-local monotonic attempt duration from preparation through
-commit/failure, including any in-attempt barrier wait, excluding queue/skipped-backoff
-time. It samples while active and freezes terminally. Persist health, not active progress;
-restart uses idle/zero/null/empty progress even if verified choices are restored later.
+commit/failure, including in-attempt prerequisite/queue waits, excluding pre-attempt
+queue/skipped-backoff time. It samples while active and freezes terminally. Persist
+health, not active progress; restart uses idle/zero/null/empty progress even if verified
+choices are restored later.
 Every new accepted job resets options to queued (or skipped backoff) with null times,
 zero elapsed and empty rows, along with all ticket progress. Coalescing resets nothing.
 Actual options attempt sets started_at and its own health.last_attempt_at together.
@@ -310,8 +353,11 @@ progress examples are not measured performance promises or tenant/API coverage c
 
 Illustrative mocks: [cards visible during eligibility](examples/sync-options-active.json),
 [fresh tickets with stale ready options](examples/sync-options-failed.json),
-[failed initial options discovery](examples/sync-options-unavailable.json), and
-[indeterminate group membership](examples/sync-options-discovering.json).
+[failed initial options discovery](examples/sync-options-unavailable.json),
+[indeterminate group membership](examples/sync-options-discovering.json), and
+[concurrent card fetching, metadata discovery and project checking](examples/sync-options-concurrent.json).
+These remain rows in the original compact Source health disclosure; no UI redesign
+or additional progress display is required.
 
 Run `python api/validate_contract.py` with `jsonschema` and `openapi-spec-validator`
 installed for offline schema/reference/example/negative-case validation. It checks
@@ -762,8 +808,8 @@ safeguards, never replay an unconfirmed live create after disconnect/restart.
 The normal refresh job loads all configured projects' create metadata, every
 allowed issue type's capabilities/team choices, complete eligible assignee pools,
 all configured-board active/future sprints and per-type workflow statuses **before**
-publishing **options** success, independently after Jira ticket work. GET options
-and both draft/create flows consume this cache;
+publishing **options** success, independently of Jira ticket work and possibly before
+ticket publication. GET options and both draft/create flows consume this cache;
 they never enumerate groups, page assignable users, perform per-user eligibility
 checks or rediscover metadata/statuses. Opening/searching a dialog must not start
 discovery. AI draft generation and explicit live create/follow-up calls remain allowed
@@ -791,7 +837,9 @@ new metadata/pools/policy into it. Final live create is still subject to Jira's 
 upstream write/assignment permissions.
 The same verified sprint read may be staged for ticket and options publication, but
 retained choices always keep their own generation's sprint set until a complete
-replacement commits; new card sprints never mutate old options.
+replacement commits; new card sprints never mutate old options. Reusing a sprint read
+must not make options wait for unrelated ticket hydration, and a required sprint read
+failure is propagated to both domains that depend on it.
 
 `SyncStatus.jira_options` supplies independent readiness, persisted health and live
 progress, without a new endpoint or configured source. Its health `last_success_at`

@@ -78,6 +78,20 @@ def options_progress_invariants(value):
                 raise ValueError("Eligibility checks require a complete known workload")
     if value["phase"] in {"publishing", "completed"} and not value["projects"]:
         raise ValueError("Complete options require all configured projects (nonempty in YAML)")
+    if any(row["phase"] != "completed" for row in value["groups"]):
+        if any(
+            row["total_items"] is not None or row["phase"] in {"fetching", "completed"}
+            for row in value["projects"]
+        ):
+            raise ValueError("Complete group membership must precede the eligibility workload")
+    if value["phase"] == "fetching":
+        if not any(
+            row["phase"] in {"queued", "fetching"}
+            and row["total_items"] is not None
+            and row["completed_items"] < row["total_items"]
+            for row in value["projects"]
+        ):
+            raise ValueError("Fetching options must have outstanding eligibility checks")
 
 
 def attempt_invariants(health, progress):
@@ -117,15 +131,8 @@ def sync_invariants(value):
     options = value["jira_options"]
     if options is not None:
         options_status_invariants(options)
-        options_phase = options["progress"]["phase"]
-        card_fetching = {"idle", "queued", "preparing", "discovering", "fetching"}
-        jira_progress = next(entry for entry in progress if entry["source_id"] == "jira")
-        if options_phase in {"preparing", "discovering", "fetching", "publishing", "completed"}:
-            if jira_progress["phase"] in card_fetching:
-                raise ValueError("Creation discovery follows Jira card fetching")
-        if options_phase in {"fetching", "publishing", "completed"}:
-            if any(entry["phase"] in card_fetching for entry in progress):
-                raise ValueError("Final eligibility follows all source card fetching")
+        # Eligibility may overlap every card phase. The adaptive one-item/full-item
+        # scheduling limit is a runtime invariant, not inferable from these counters.
     if value["state"] == "idle" and value["finished_at"] is not None:
         required_phases = [entry["phase"] for entry in progress]
         if options is not None:
@@ -518,11 +525,12 @@ reject("SyncStatus", {**status, "finished_at": None})
 reject("SyncStatus", {**status, "started_at": None})
 reject("SyncStatus", {**status, "progress": [queued, *status["progress"][1:]]})
 
-# Ticket-first wire examples and cross-field rules, not an execution/concurrency test.
+# Ticket-favoring wire examples/cross-field rules, not an execution/concurrency test.
 options_active = documents["examples/sync-options-active.json"]
 options_failed = documents["examples/sync-options-failed.json"]
 options_unavailable = documents["examples/sync-options-unavailable.json"]
 options_discovering = documents["examples/sync-options-discovering.json"]
+options_concurrent = documents["examples/sync-options-concurrent.json"]
 options_status = options_active["jira_options"]
 options_progress = options_status["progress"]
 complete_options = status["jira_options"]
@@ -591,11 +599,67 @@ accept("SyncStatus", {
         "progress": {**options_discovering["jira_options"]["progress"], "phase": "preparing"},
     },
 })
-# Metadata/groups may overlap remaining forge card reads; eligibility may not.
+# Metadata/groups may overlap Jira and forge card reads, not just completed Jira.
 overlapping_discovery = copy.deepcopy(options_discovering)
-overlapping_discovery["sources"][1]["last_success_at"] = "2026-11-09T11:00:30Z"
-overlapping_discovery["progress"][1].update({"phase": "fetching", "finished_at": None})
+for source, entry in zip(overlapping_discovery["sources"], overlapping_discovery["progress"]):
+    source["last_success_at"] = "2026-11-09T11:00:30Z"
+    entry.update({"phase": "fetching", "finished_at": None})
 accept("SyncStatus", overlapping_discovery)
+
+# Completed mock memberships overlap by 15 accounts: project totals are the complete
+# deduplicated 75 candidates, not the 90 summed members or any card count. Metadata
+# remains discovering while one project has finished checking and the other has not.
+concurrent_progress = options_concurrent["jira_options"]["progress"]
+if not (
+    concurrent_progress["phase"] == "discovering"
+    and all(row["phase"] == "completed" for row in concurrent_progress["groups"])
+    and sum(row["total_items"] for row in concurrent_progress["groups"]) == 90
+    and concurrent_progress["projects"] == options_progress["projects"]
+    and all(entry["phase"] == "fetching" for entry in options_concurrent["progress"])
+    and not options_concurrent["jira_options"]["ready"]
+):
+    raise ValueError("Concurrent fixture must show card/metadata/complete-membership eligibility overlap")
+for phase in ("preparing", "discovering"):
+    for projects in (
+        options_progress["projects"],
+        complete_progress["projects"],
+        [{**row, "phase": "queued", "completed_items": 0} for row in options_progress["projects"]],
+    ):
+        accept("JiraOptionsProgress", {**concurrent_progress, "phase": phase, "projects": projects})
+    # No configured groups still requires complete candidate discovery, represented
+    # by known totals, without inventing an all-users work row.
+    accept("JiraOptionsProgress", {**concurrent_progress, "phase": phase, "groups": []})
+    accept("JiraOptionsProgress", {
+        **concurrent_progress, "phase": phase,
+        "groups": [{"name": "empty-group", "phase": "completed", "completed_items": 0, "total_items": 0}],
+        "projects": [{"name": "IDM", "phase": "completed", "completed_items": 0, "total_items": 0}],
+    })
+
+# All options phases can coexist with any unfinished card source, including queued
+# and publishing. A fully complete generation may commit before either card source.
+# These wire cases cannot prove the runtime one-item rule or automatic expansion.
+for source_id in ("jira", "work-github"):
+    for card_phase in ("queued", "preparing", "discovering", "fetching", "publishing"):
+        overlapping = copy.deepcopy(options_active)
+        index = next(i for i, entry in enumerate(overlapping["progress"]) if entry["source_id"] == source_id)
+        entry = overlapping["progress"][index]
+        entry.update({"phase": card_phase, "finished_at": None})
+        overlapping["sources"][index]["last_success_at"] = "2026-11-09T11:00:30Z"
+        if card_phase in {"queued", "preparing", "discovering"}:
+            entry.update({"completed_items": 0, "total_items": None})
+        if card_phase == "queued":
+            entry.update({"started_at": None, "elapsed_ms": 0})
+        for options_phase in ("preparing", "discovering", "fetching", "publishing", "completed"):
+            result = copy.deepcopy(overlapping)
+            attempt = result["jira_options"]["progress"]
+            attempt["phase"] = options_phase
+            if options_phase in {"publishing", "completed"}:
+                attempt["projects"] = complete_progress["projects"]
+            if options_phase == "completed":
+                attempt["finished_at"] = "2026-11-09T12:00:30Z"
+                result["jira_options"]["health"]["last_success_at"] = attempt["finished_at"]
+                result["board_revision"] += 1
+            accept("SyncStatus", result)
 accept("SyncStatus", {
     **options_active,
     "jira_options": {
@@ -717,22 +781,86 @@ reject("JiraOptionsProgress", {
 reject("JiraOptionsProgress", {
     **options_progress, "groups": [{"name": "example-group", "phase": "fetching", "completed_items": 0, "total_items": 75}],
 })
-# No eligibility while a group is incomplete, metadata is still discovering, or
-# another source is fetching cards; no creation discovery ahead of Jira cards.
+# Incomplete membership, unlike incomplete metadata/cards, forbids known project
+# workloads and eligibility in every top phase. Completed rows do not bypass this.
 reject("JiraOptionsProgress", {
     **options_progress, "groups": options_discovering["jira_options"]["progress"]["groups"],
 })
 reject("JiraOptionsProgress", {
     **options_discovering["jira_options"]["progress"], "projects": options_progress["projects"],
 })
-for source_id in ("jira", "work-github"):
-    invalid = copy.deepcopy(options_active)
-    entry = next(entry for entry in invalid["progress"] if entry["source_id"] == source_id)
-    entry.update({"phase": "fetching", "finished_at": None})
-    reject("SyncStatus", invalid)
-invalid = copy.deepcopy(options_discovering)
-invalid["progress"][0].update({"phase": "fetching", "finished_at": None})
-reject("SyncStatus", invalid)
+reject("JiraOptionsProgress", {
+    **concurrent_progress,
+    "groups": [
+        concurrent_progress["groups"][0],
+        {**concurrent_progress["groups"][1], "phase": "discovering", "completed_items": 0, "total_items": None},
+    ],
+})
+for phase in ("preparing", "discovering"):
+    for project in (
+        {"name": "IDM", "phase": "queued", "completed_items": 0, "total_items": 75},
+        {"name": "IDM", "phase": "fetching", "completed_items": 0, "total_items": 75},
+        {"name": "IDM", "phase": "completed", "completed_items": 0, "total_items": 0},
+    ):
+        reject("JiraOptionsProgress", {
+            **options_discovering["jira_options"]["progress"], "phase": phase,
+            "projects": [project],
+        })
+    # Active discovery may not report terminally failed/backoff rows and continue.
+    reject("JiraOptionsProgress", {
+        **concurrent_progress, "phase": phase,
+        "projects": [{**options_progress["projects"][1], "phase": "failed"}],
+    })
+    reject("JiraOptionsProgress", {
+        **concurrent_progress, "phase": phase,
+        "groups": [{"name": "example-group", "phase": "failed", "completed_items": 0, "total_items": None}],
+        "projects": [],
+    })
+# fetching requires complete discovery AND genuinely outstanding eligibility. All
+# projects finished while metadata is pending remains preparing/discovering instead.
+for projects in (
+    [],
+    complete_progress["projects"],
+    [{"name": "IDM", "phase": "queued", "completed_items": 0, "total_items": 0}],
+    [{"name": "IDM", "phase": "fetching", "completed_items": 75, "total_items": 75}],
+    [
+        options_progress["projects"][1],
+        {"name": "IDM", "phase": "queued", "completed_items": 0, "total_items": None},
+    ],
+):
+    reject("JiraOptionsProgress", {**options_progress, "projects": projects})
+
+# Branch-specific failures are independent: tickets can fail/back off while options
+# commit; options metadata can fail after all checks finish without failing cards.
+for card_phase in ("failed", "backoff"):
+    independent = copy.deepcopy(options_active)
+    independent["sources"][0].update({
+        "status": "error" if card_phase == "failed" else "backoff",
+        "last_success_at": "2026-11-09T11:00:30Z",
+        "error": "Could not finish Jira ticket discovery.",
+        "retry_at": None if card_phase == "failed" else "2026-11-09T12:10:00Z",
+    })
+    independent["progress"][0]["phase"] = card_phase
+    independent["jira_options"] = complete_options
+    accept("SyncStatus", independent)
+    independent = {**independent, "state": "idle", "finished_at": "2026-11-09T12:00:30Z"}
+    accept("SyncStatus", independent)
+accept("JiraOptionsStatus", {
+    **options_failed["jira_options"],
+    "progress": {
+        **options_failed["jira_options"]["progress"],
+        "projects": complete_progress["projects"],
+    },
+})
+independent = copy.deepcopy(options_concurrent)
+independent["jira_options"]["health"].update({
+    "status": "error", "error": "Could not finish creation metadata discovery.",
+})
+independent["jira_options"]["progress"].update({
+    "phase": "failed", "finished_at": "2026-11-09T12:00:15Z",
+    "projects": complete_progress["projects"],
+})
+accept("SyncStatus", independent)
 # Stale choices and newer display sprints are allowed to differ. This is not a
 # cross-response generation merge; options/draft/create validation uses its own cache.
 early_context = documents["examples/context-ticket-first.json"]

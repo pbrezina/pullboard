@@ -7,22 +7,28 @@ use crate::{
     model::*,
 };
 use chrono::Utc;
-use futures_util::{StreamExt, stream};
+use futures_util::{FutureExt, StreamExt, TryFutureExt, stream};
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 use tokio_util::sync::CancellationToken;
 
 // Source reads borrow the adapters and stay inside the single refresh worker.
 // Per-origin HTTP request budgets are enforced separately by the transports.
 const MAX_CONCURRENT_SOURCES: usize = 4;
 
-struct StagedChoices {
-    scope: String,
-    discovery: crate::jira::ChoiceDiscovery,
-    reporter: ChoiceReporter,
+// Created for every configured source before any future is polled, including
+// queued sources. A guard lives through its card transaction, not options work.
+struct CardAttempt(watch::Sender<usize>);
+impl Drop for CardAttempt {
+    fn drop(&mut self) {
+        self.0.send_modify(|remaining| *remaining -= 1);
+    }
 }
 
 enum Source<'a> {
@@ -257,6 +263,7 @@ impl Progress {
 #[derive(Clone, Default)]
 pub(crate) struct ChoiceReporter {
     live: Option<Arc<Mutex<Live>>>,
+    discovery_complete: Arc<AtomicBool>,
 }
 impl ChoiceReporter {
     fn update(&self, f: impl FnOnce(&mut JiraOptionsProgress)) {
@@ -297,13 +304,30 @@ impl ChoiceReporter {
     }
     pub(crate) fn eligibility(&self, total: u64) {
         self.update(|p| {
-            p.phase = SourcePhase::Fetching;
             for row in &mut p.projects {
                 row.total_items = Some(total);
                 if total == 0 {
                     row.phase = SourcePhase::Completed;
                 }
             }
+            self.refresh_phase(p);
+        });
+    }
+    fn refresh_phase(&self, p: &mut JiraOptionsProgress) {
+        if self.discovery_complete.load(Ordering::Relaxed)
+            && p.projects.iter().all(|r| r.total_items.is_some())
+            && p.projects.iter().any(|r| r.phase != SourcePhase::Completed)
+        {
+            p.phase = SourcePhase::Fetching;
+        } else {
+            p.phase = SourcePhase::Discovering;
+        }
+    }
+    pub(crate) fn metadata_completed(&self) {
+        self.update(|p| {
+            // Store and phase decisions share the live lock with eligibility.
+            self.discovery_complete.store(true, Ordering::Relaxed);
+            self.refresh_phase(p);
         });
     }
     pub(crate) fn project_started(&self, key: &str) {
@@ -321,6 +345,7 @@ impl ChoiceReporter {
                     row.phase = SourcePhase::Completed;
                 }
             }
+            self.refresh_phase(p);
         });
     }
 }
@@ -580,6 +605,7 @@ impl Syncer {
         live.options_clock = Some(Instant::now());
         Some(ChoiceReporter {
             live: Some(self.live.clone()),
+            ..Default::default()
         })
     }
     async fn publish_options(&self, scope: Option<String>, result: Result<crate::jira::Metadata>) {
@@ -662,14 +688,30 @@ impl Syncer {
             }
         }
     }
-    async fn read_source(&self, source: Source<'_>) -> Option<StagedChoices> {
+    async fn read_source(
+        &self,
+        source: Source<'_>,
+        card: CardAttempt,
+        cards: watch::Receiver<usize>,
+    ) {
         let initial_scope = self.cache.committed().scopes.get(source.id()).cloned();
         let Some((index, progress)) = self.start(source.id()) else {
+            drop(card);
             if matches!(source, Source::Jira(_)) && self.start_options().is_some() {
-                self.publish_options(initial_scope, Err(Error::unavailable()))
-                    .await;
+                let error = self
+                    .live
+                    .lock()
+                    .expect("sync lock poisoned")
+                    .status
+                    .sources
+                    .iter()
+                    .find(|s| s.source_id == source.id())
+                    .and_then(|s| s.retry_at)
+                    .filter(|at| *at > Utc::now())
+                    .map_or_else(Error::unavailable, Error::backoff);
+                self.publish_options(initial_scope, Err(error)).await;
             }
-            return None;
+            return;
         };
         let verified = match source.identity().await {
             Ok(identity) => self
@@ -694,7 +736,7 @@ impl Syncer {
                     Err(error) => (initial_scope, Err(error)),
                 };
                 self.publish_source(index, scope.as_deref(), result).await;
-                None
+                drop(card);
             }
             Source::Jira(jira) => {
                 let (identity, scope) = match verified {
@@ -702,50 +744,57 @@ impl Syncer {
                     Err(error) => {
                         self.publish_source(index, initial_scope.as_deref(), Err(error.clone()))
                             .await;
+                        drop(card);
                         if self.start_options().is_some() {
                             self.publish_options(initial_scope, Err(error)).await;
                         }
-                        return None;
+                        return;
                     }
                 };
                 if let Some(error) = self.retry_error(index) {
                     self.publish_source(index, Some(&scope), Err(error.clone()))
                         .await;
+                    drop(card);
                     if self.start_options().is_some() {
                         self.publish_options(Some(scope), Err(error)).await;
                     }
-                    return None;
+                    return;
                 }
-                let preparation = jira.prepare_tickets().await;
-                let result = match &preparation {
-                    Ok(preparation) => {
-                        jira.read_tickets(identity.clone(), preparation, progress)
+                let preparation = jira.prepare_tickets().map_ok(Arc::new).boxed().shared();
+                let sprints = jira.sprints().map_ok(Arc::new).boxed().shared();
+                let tickets = async {
+                    let result = match preparation.clone().await {
+                        Ok(preparation) => {
+                            jira.read_tickets(
+                                identity.clone(),
+                                &preparation,
+                                sprints.clone(),
+                                progress,
+                            )
                             .await
-                    }
-                    Err(error) => Err(error.clone()),
+                        }
+                        Err(error) => Err(error),
+                    };
+                    self.publish_source(index, Some(&scope), result).await;
+                    drop(card);
                 };
-                let sprints = result.as_ref().ok().map(|d| d.sprints.clone());
-                self.publish_source(index, Some(&scope), result).await;
-                let reporter = self.start_options()?;
-                let choices = jira
-                    .discover_choices(
-                        &identity,
-                        preparation.as_ref().ok(),
-                        sprints.as_deref(),
-                        reporter.clone(),
-                    )
-                    .await;
-                match choices {
-                    Ok(discovery) => Some(StagedChoices {
-                        scope,
-                        discovery,
-                        reporter,
-                    }),
-                    Err(error) => {
-                        self.publish_options(Some(scope), Err(error)).await;
-                        None
+                let options = async {
+                    if let Some(reporter) = self.start_options() {
+                        let result = jira
+                            .discover_choices(
+                                &identity,
+                                preparation.clone(),
+                                sprints.clone(),
+                                reporter,
+                                cards,
+                            )
+                            .await;
+                        self.publish_options(Some(scope.clone()), result).await;
                     }
-                }
+                };
+                // Branch failures never cancel the other domain, including its
+                // shared prerequisite read or in-memory SQLite publication.
+                tokio::join!(tickets, options);
             }
         }
     }
@@ -773,37 +822,27 @@ impl Syncer {
             self.finish();
             return;
         }
+        let count = self.forges.len() + usize::from(self.jira.is_some());
+        let (remaining, cards) = watch::channel(count);
         let mut reads = Vec::new();
         if let Some(jira) = &self.jira {
-            reads.push(self.read_source(Source::Jira(jira.as_ref())));
+            reads.push(self.read_source(
+                Source::Jira(jira.as_ref()),
+                CardAttempt(remaining.clone()),
+                cards.clone(),
+            ));
         }
         for forge in &self.forges {
-            reads.push(self.read_source(Source::Forge(forge.as_ref())));
+            reads.push(self.read_source(
+                Source::Forge(forge.as_ref()),
+                CardAttempt(remaining.clone()),
+                cards.clone(),
+            ));
         }
+        drop(remaining);
         let mut reads = stream::iter(reads).buffer_unordered(MAX_CONCURRENT_SOURCES);
-        let mut choices = None;
         // Publications happen inside each owned future while other sources continue.
-        while let Some(outcome) = reads.next().await {
-            if outcome.is_some() {
-                choices = outcome;
-            }
-        }
-        // Lowest priority barrier: every card future and complete discovery above
-        // terminated. The borrowed queue below cannot escape the refresh worker.
-        if let Some(StagedChoices {
-            scope,
-            discovery,
-            reporter,
-        }) = choices
-        {
-            let result = self
-                .jira
-                .as_ref()
-                .expect("Jira configured")
-                .check_choices(discovery, reporter)
-                .await;
-            self.publish_options(Some(scope), result).await;
-        }
+        while reads.next().await.is_some() {}
         self.finish();
         tracing::info!(
             elapsed_ms = elapsed(started, Instant::now()),

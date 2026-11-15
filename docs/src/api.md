@@ -3,11 +3,12 @@
 `api/openapi.json` is the normative OpenAPI 3.1 wire contract; `api/CONTRACT.md`
 explains its invariants. Both live in the repository and must be read before
 API-facing changes. This guide does not define an alternative payload format.
-The current contract is **v1.5.0**: ticket-first independent source publications,
-`SyncStatus.board_revision` and separate nullable `SyncStatus.jira_options` health,
-readiness and progress. Complete atomic choice generations, existing name-based create
-`status` fields and upstream-issue resolve/draft/create endpoints remain. Consult the
-canonical contract files for exact schemas, required/null fields and ordering rules.
+The current contract is **v1.6.0**: ticket-favoring concurrent refresh permits overlapping
+ticket, metadata/group and eligibility progress without new wire fields/phases.
+Independent source publications, `SyncStatus.board_revision`, separate nullable
+`SyncStatus.jira_options` health/readiness/progress, complete atomic choice generations,
+name-based create `status` and upstream-issue endpoints remain. Consult the canonical
+contract files for exact schemas, required/null fields and ordering rules.
 
 | Method | Endpoint | Result |
 | --- | --- | --- |
@@ -144,12 +145,24 @@ pagination/dedup completes. Project progress counts finished account eligibility
 including negative results, with unknown totals until the deduplicated inventory is
 complete. No ticket counts, raw account rows or aggregate options percentage are added.
 
-Metadata/status and group discovery follow Jira ticket work. Final eligibility is a
-standalone lowest-priority bounded queue across project/account pairs, only after all
-source card fetching terminates and creation discovery completes. Repeated groups and
-overlapping accounts are deduplicated. The existing YAML-configurable shared per-origin
-HTTP cap (default 4), item cap (default 4), pagination, response/time bounds and backoff
-remain; no nested cap multiplication, raised cap or new hybrid/bulk APIs. The job stays
+After one verified Jira identity, tickets, creation metadata/statuses and groups may
+run concurrently. Eligibility waits only for complete deduplicated membership candidates
+(complete human inventory without groups), not metadata or tickets. One owned bounded
+project/account queue permits at most one eligibility request/item in flight while
+any card source is queued/preparing/discovering/fetching/publishing. It dynamically
+expands to existing configured item concurrency after all card attempts terminate,
+including failure/skipped backoff. Metadata/groups may compete; there is no preemption
+or fixed-latency guarantee, and HTTP cap 1 naturally serializes reads.
+
+Options `preparing`/`discovering` may overlap project checks; all projects may complete
+before metadata. `fetching` means metadata/groups complete with eligibility outstanding,
+not an all-card barrier. Reuse verified prerequisites/sprint reads without waiting for
+ticket hydration. Options may commit before cards, always as a complete generation
+owning its full sprint snapshot. Branch-specific failures do not cancel the other
+domain or undo its commit; shared prerequisite/backoff failures propagate honestly.
+The existing YAML-configurable shared per-origin HTTP cap (default 4), item cap
+(default 4), pagination, response/time bounds and backoff remain authoritative; no
+nested cap multiplication, new setting, raised cap or hybrid/bulk APIs. The job stays
 syncing through options; `last_success_at` advances only when all configured ticket
 sources **and enabled Jira options** commit successfully, never on failure/skipped backoff.
 

@@ -58,12 +58,15 @@ Source identities, snapshots and health remain separate.
 Explicitly submitted Jira writes also use this admission budget; it never initiates
 or automatically retries writes.
 
-Ticket-first refresh uses these **existing** bounds for searches, hydration,
-creation discovery and the final eligibility queue. Nested work never multiplies
-the shared HTTP cap (default 4); the change adds no concurrency knob, raised cap,
-hybrid eligibility or new bulk APIs. Each complete source publishes independently;
-creation metadata/groups follow Jira ticket work, and eligibility waits for all source
-card fetching and creation discovery to finish. See [refresh scheduling](security-cache.md#ticket-first-scheduling-and-options-progress).
+Ticket-favoring concurrent refresh uses these **existing** bounds for searches,
+hydration, creation discovery and one project/account eligibility queue. After verified
+identity, tickets/metadata/groups may overlap; eligibility waits only for complete
+membership candidates. It allows one in-flight request/item while any card attempt is
+unfinished, dynamically expanding to `max_concurrent_items` when all terminate,
+including failure/backoff. The shared HTTP cap (default 4) remains authoritative;
+nested work never multiplies it. There is no new knob, raised cap or hybrid/bulk API.
+Metadata/groups may compete, so this is not preemption or a latency guarantee; cap 1
+serializes reads. See [refresh scheduling](security-cache.md#ticket-favoring-concurrency-and-options-progress).
 
 For GitHub, effective batch size is
 `min(github_batch_size, max_concurrent_items)`; at most

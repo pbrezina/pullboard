@@ -217,65 +217,79 @@ impl Jira {
             .cloned()
             .or(initial_scope);
         let preparation = match &identity {
-            Ok(_) => self.prepare_tickets().await,
+            Ok(_) => self.prepare_tickets().await.map(Arc::new),
             Err(error) => Err(error.clone()),
         };
-        let tickets = match (&identity, &preparation) {
-            (Ok(identity), Ok(preparation)) => {
-                self.read_tickets(
-                    identity.clone(),
-                    preparation,
-                    crate::sync::Progress::default(),
-                )
-                .await
+        let preparation = futures_util::future::ready(preparation).boxed().shared();
+        let sprints = async {
+            match &identity {
+                Ok(_) => self.sprints().await.map(Arc::new),
+                Err(error) => Err(error.clone()),
             }
-            (Err(error), _) | (_, Err(error)) => Err(error.clone()),
-        };
-        let ticket_error = tickets.as_ref().err().cloned();
-        let sprints = tickets.as_ref().ok().map(|d| d.sprints.clone());
-        let mut ticket_health = cache
-            .committed()
-            .sources
-            .into_iter()
-            .find(|h| h.source_id == "jira")
-            .ok_or_else(not_ready)?;
-        ticket_health.last_attempt_at = Some(attempt);
-        let ticket_commit = cache
-            .publish_source(
-                crate::cache::SourceUpdate {
-                    source_id: "jira".into(),
-                    result: tickets,
-                },
-                ticket_health,
-                scope.as_deref(),
-            )
-            .await;
-        let mut health = cache.committed().options.ok_or_else(not_ready)?;
-        health.last_attempt_at = Some(Utc::now());
-        let choices = match &identity {
-            Ok(identity) => match self
-                .discover_choices(
-                    identity,
-                    preparation.as_ref().ok(),
-                    sprints.as_deref(),
-                    crate::sync::ChoiceReporter::default(),
-                )
-                .await
-            {
-                Ok(discovery) => {
-                    self.check_choices(discovery, crate::sync::ChoiceReporter::default())
-                        .await
+        }
+        .boxed()
+        .shared();
+        let (cards, receiver) = watch::channel(1);
+        let tickets = async {
+            let tickets = match (&identity, preparation.clone().await) {
+                (Ok(identity), Ok(preparation)) => {
+                    self.read_tickets(
+                        identity.clone(),
+                        &preparation,
+                        sprints.clone(),
+                        crate::sync::Progress::default(),
+                    )
+                    .await
                 }
-                Err(error) => Err(error),
-            },
-            Err(error) => Err(error.clone()),
+                (Err(error), _) => Err(error.clone()),
+                (_, Err(error)) => Err(error),
+            };
+            let ticket_error = tickets.as_ref().err().cloned();
+            let mut ticket_health = cache
+                .committed()
+                .sources
+                .into_iter()
+                .find(|h| h.source_id == "jira")
+                .ok_or_else(not_ready)?;
+            ticket_health.last_attempt_at = Some(attempt);
+            let ticket_commit = cache
+                .publish_source(
+                    crate::cache::SourceUpdate {
+                        source_id: "jira".into(),
+                        result: tickets,
+                    },
+                    ticket_health,
+                    scope.as_deref(),
+                )
+                .await;
+            cards.send_replace(0);
+            ticket_commit?;
+            ticket_error.map_or(Ok(()), Err)
         };
-        let choice_error = choices.as_ref().err().cloned();
-        cache
-            .publish_options(scope.as_deref(), choices, health)
-            .await?;
-        ticket_commit?;
-        ticket_error.or(choice_error).map_or(Ok(()), Err)
+        let choices = async {
+            let mut health = cache.committed().options.ok_or_else(not_ready)?;
+            health.last_attempt_at = Some(Utc::now());
+            let choices = match &identity {
+                Ok(identity) => {
+                    self.discover_choices(
+                        identity,
+                        preparation.clone(),
+                        sprints.clone(),
+                        crate::sync::ChoiceReporter::default(),
+                        receiver,
+                    )
+                    .await
+                }
+                Err(error) => Err(error.clone()),
+            };
+            let choice_error = choices.as_ref().err().cloned();
+            cache
+                .publish_options(scope.as_deref(), choices, health)
+                .await?;
+            choice_error.map_or(Ok(()), Err)
+        };
+        let (tickets, choices) = tokio::join!(tickets, choices);
+        tickets.and(choices)
     }
     pub(super) async fn choices(&self) -> Result<Metadata> {
         let account = self.account_id().await?;

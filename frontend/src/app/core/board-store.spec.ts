@@ -241,6 +241,70 @@ describe('BoardStore revision-aware polling and publication races', () => {
     store.sync.set({ ...status(), jira_options: null });
     expect(store.jiraOptionsReady()).toBe(false);
   });
+  it('requires a committed options generation, then accepts it before any cards complete', () => {
+    const s = status();
+    s.progress = s.progress.map((p) => ({
+      ...p,
+      phase: 'fetching',
+      started_at: s.started_at,
+      completed_items: 8,
+      total_items: 55,
+      elapsed_ms: 15000,
+    }));
+    s.jira_options = {
+      ...s.jira_options!,
+      ready: false,
+      health: { ...s.jira_options!.health, status: 'pending', last_success_at: null },
+      progress: {
+        ...s.jira_options!.progress,
+        phase: 'discovering',
+        started_at: s.started_at,
+        elapsed_ms: 14000,
+        groups: [{ name: 'Reviewers', phase: 'completed', completed_items: 75, total_items: 75 }],
+        projects: [{ name: 'DEV', phase: 'fetching', completed_items: 28, total_items: 75 }],
+      },
+    };
+    store.start();
+    flush(s);
+    expect(store.jiraOptionsReady()).toBe(false);
+    const allChecked = {
+      ...s,
+      jira_options: {
+        ...s.jira_options,
+        progress: {
+          ...s.jira_options.progress,
+          projects: [
+            { name: 'DEV', phase: 'completed' as const, completed_items: 75, total_items: 75 },
+          ],
+        },
+      },
+    };
+    poll(allChecked);
+    expect(store.jiraOptionsReady()).toBe(false);
+    http.expectNone('/api/context');
+    http.expectNone('/api/board');
+    const committed: SyncStatus = {
+      ...s,
+      board_revision: 2,
+      jira_options: {
+        ...allChecked.jira_options,
+        ready: true,
+        health: sync().jira_options!.health,
+        progress: {
+          ...allChecked.jira_options.progress,
+          phase: 'completed',
+          finished_at: '2026-11-06T12:00:14Z',
+        },
+      },
+    };
+    poll(committed);
+    flush(committed);
+    expect(store.jiraOptionsReady()).toBe(true);
+    expect(store.sync()?.state).toBe('syncing');
+    expect(store.sync()?.progress.every((p) => p.phase === 'fetching')).toBe(true);
+    expect(store.board()?.revision).toBe(2);
+    http.expectNone('/api/jira/options');
+  });
   it('surfaces refresh failures and cancels timers and pending requests on destruction', () => {
     store.refresh();
     http

@@ -19,7 +19,7 @@ fixes. Do not delete unfamiliar work or claim tests you did not run.
 | `backend/src/attention.rs` | Timestamp-based independent stream resolution |
 | `backend/src/jira.rs`, `jira/discovery.rs` | Refresh-time complete scoped choices/policy, Cloud identity/typed metadata/statuses, board sprints, candidate eligibility and explicit write gates |
 | `backend/src/ai.rs` | Selected untrusted PR proposal generation and deterministic fallback |
-| `backend/src/cache.rs`, `sync.rs` | Independent atomic source snapshots and complete options generations, coalesced ticket-first worker, publication revisions and separate ticket/options progress/health |
+| `backend/src/cache.rs`, `sync.rs` | Independent atomic source snapshots and complete options generations, coalesced ticket-favoring concurrent worker, publication revisions and separate ticket/options progress/health |
 | `backend/src/runtime_mode.rs` | Process-wide mode/revision, atomic toggle and action admission |
 | `backend/src/api.rs`, `main.rs` | Same-origin routes/static assets, CLI and graceful lifecycle |
 | `frontend/src/app/core/` | Typed API/state/display preferences, sync/mode polling and explicit stale-mode review |
@@ -38,13 +38,13 @@ Documentation uses mdBook's built-in include preprocessing, no custom backend.
 ```text
 one YAML → validated configuration → credentials resolved
           ↓
-principal verification → account-scoped cache restore/purge → read-only discovery
-          ↓
-normalized source cards/sprints → independent atomic SQLite source publications
-          ↓
-creation metadata/groups → wait for all source reads → bounded eligibility queue
-          ↓
-complete atomic options generation (own sprints/policy)
+principal verification → account-scoped cache restore/purge
+          ├→ source card discovery/hydration → independent atomic source publications
+          ├→ creation metadata/statuses ────────────────────────────┐
+          └→ complete membership candidates → bounded eligibility ┤
+             shared complete sprint read ──────────────────────────┤
+                                                                 ↓
+                          complete atomic options generation (own sprints/policy)
           ↓
 latest committed cache → same-origin REST → Angular signals
        └──────→ board_revision + separate ticket/options status → HTTP polling
@@ -65,7 +65,7 @@ AI or add attention. Manual content stays outside Board/SQLite in a process-loca
 policy. Refresh preserves those selections; eviction/restart/scope invalidation
 requires explicit recovery, not automatic create replay. Jira cloning does not
 introduce duplicate searches, clone state or broad Jira/forge scans. See
-[upstream issue flow](upstream-issues.md) and [v1.5 API](api.md).
+[upstream issue flow](upstream-issues.md) and [v1.6 API](api.md).
 
 Keep upstream IDs and timestamps real. Never infer handled attention from a commit,
 manufacture missing event times, synthesize Jira IDs, or conceal coverage gaps. A
@@ -166,16 +166,26 @@ short-circuit unrelated sources, expose partial pages/items or undo another comm
 each failed domain retains only its own verified same-scope last-good data and health.
 Identity verification/quarantine remains a separate safety gate.
 
-After Jira ticket work, bounded creation metadata/status and complete group discovery
-may overlap remaining forge reads. Only after **all source card fetching terminates
-and creation discovery is complete** does standalone lowest-priority eligibility run.
-One bounded queue spans project/account pairs, deduplicating overlapping group accounts
-before checks; it is not sequential per-project batches or a detached worker.
+After verified Jira identity, ticket work, creation metadata/statuses and group discovery
+may run concurrently. Eligibility waits only for complete deduplicated membership
+candidates (or complete human inventory without groups), not metadata or tickets.
+One owned bounded project/account queue allows at most one eligibility request/item
+in flight while any configured card source is queued, preparing, discovering, fetching
+or publishing. A watch-driven scheduler expands to existing configured item concurrency
+when all card attempts terminate, including failed/skipped-backoff attempts. This is
+neither sequential per-project batches nor detached work. Metadata/groups may compete
+with cards; transport fairness/backoff apply, with no preemption or fixed-latency promise.
+HTTP cap 1 naturally serializes reads.
+
 Group pagination stays indeterminate until complete; project progress counts finished
-checks, including negative eligibility results, never ticket counts or only retained
-assignees. Complete options publish in their own atomic transaction and health domain.
-Overall job success requires every configured ticket source and enabled Jira options
-to succeed, even though their publications and failures are independent.
+checks, including negative results, never tickets or only retained assignees. Options
+preparing/discovering may overlap checks or show every project completed while metadata
+is pending; fetching means metadata/groups complete with eligibility outstanding, not
+a card barrier. Reuse shared prerequisites/sprint reads without a ticket-hydration barrier.
+Complete options, including their own full sprint snapshot, may publish before cards
+in their independent atomic transaction/health domain. Branch-specific failures do
+not cancel the other domain or undo its commit; shared prerequisite/backoff failures
+propagate honestly. Overall job success still requires every ticket source and options.
 
 Within each source, bounded item hydration overlaps independent required reads.
 Cursor-dependent pagination stays sequential. GitHub batches obey both the item
@@ -187,9 +197,10 @@ not multiply or silently raise caps. Pagination, response/time bounds and backof
 remain unchanged; hybrid eligibility and new bulk APIs are out of scope. See
 [configuration](configuration.md#controls) for
 the three YAML knobs and [providers](providers.md#shared-request-budgets-and-rate-limits)
-for conservative cross-credential sharing and quota/backoff behavior. Contract v1.5
-adds publication/options status, not new create fields, attention rules or write
-permissions. There is no measured speedup claim for this scheduling change.
+for conservative cross-credential sharing and quota/backoff behavior. Contract v1.6
+permits concurrent options progress combinations without new wire fields/phases,
+YAML settings, create fields, attention rules or write permissions. There is no
+measured speedup claim for this scheduling change.
 
 Application-owned INFO diagnostics report safe source read/publication durations,
 creation discovery/eligibility timing, first-card/options/job timing and origin-budget

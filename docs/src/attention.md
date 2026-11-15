@@ -80,7 +80,7 @@ Jira creation options have separate readiness/health, a compact choices phase an
 eligibility rows; an options failure does not make fresh Jira cards stale. Initial
 creation waits for a verified complete options generation; stale complete choices remain
 usable. Polling loads commits mid-job without resetting filters or dialog edits. See
-[atomic publication and options progress](security-cache.md#ticket-first-scheduling-and-options-progress).
+[atomic publication and options progress](security-cache.md#ticket-favoring-concurrency-and-options-progress).
 Who-am-I shows verified identities and **Current project**: the real key/name of
 the first Jira project in YAML order, or **Not available yet** before discovery/with
 Jira disabled. This real project and current sprints are discovered with ticket/display

@@ -147,14 +147,17 @@ admitted simulations stay zero-write after switching Live. Stale requests must f
 before upstream calls, without automatic replay; preserve the accepted-create/unknown-key
 success safeguard and disconnected-outcome duplicate protection.
 
-Contract 1.5 refresh/choice-cache fixtures cover independent atomic source and options
+Contract 1.6 refresh/choice-cache fixtures cover independent atomic source and options
 publication, early real first-project/sprint context, initial readiness versus genuinely
 empty pools, each domain's complete last-good retention, failed-commit isolation,
 principal/service/config quarantine in both domains and policy changes only at successful
-options publication. Gated fixtures hold discovery/eligibility while asserting cards are
-already visible, enforce the all-source/discovery barrier and shared HTTP cap, and cover
-indeterminate full group pagination, deduplication, per-project positive/negative check
-counts, independent persisted options backoff and owned cancellation. Options, both
+options publication. Gated fixtures check overlapping cards/metadata/groups, membership-only
+eligibility gating, one in-flight eligibility item while cards are unfinished, and
+watch-driven expansion after every card attempt terminates, including queued failures
+and backoff. They cover caps 1/2/default 4, options-before-cards publication, completed
+project rows awaiting metadata, shared sprint failures, indeterminate full group
+pagination, deduplication, per-project positive/negative counts, independent persisted
+options backoff and owned cancellation. Options, both
 draft flows and both simulated create flows assert zero repeated choice-discovery
 requests. Status tests reject
 unknown/ambiguous names before create and check destination-ID no-op/direct-transition
@@ -167,8 +170,9 @@ stale choices and lazy editor load failures/late opens. Publication-aware pollin
 cover mid-job and options-only revisions, missed phases, dependent-read failure/retry,
 late-response ordering and preserved filters/editor edits/captured mode revisions.
 The mocked `frontend/e2e/ticket-first-refresh.spec.ts` exercises independent creation
-readiness and accessible group/project progress in light/dark themes; it is not live
-tenant or performance verification.
+readiness and accessible concurrent group/project progress in light/dark themes,
+preserving the compact Source health disclosure; it is not live tenant or performance
+verification.
 
 Focused cache verification uses localhost mocks, no credentials:
 
@@ -190,9 +194,11 @@ performance measurements. Keep cursor-dependent pages sequential and preserve
 last-good retention, deterministic output and fully evaluated progress counts
 when changing scheduling; never replace these with elapsed-time speed assertions.
 The existing YAML per-origin HTTP cap defaults to 4 and remains shared through nested
-search, hydration, discovery and final eligibility work; item concurrency also defaults
-to 4. Tests must not justify raising caps, hybrid eligibility or new bulk APIs. No
-measured speedup is claimed for ticket-first scheduling. For a separately authorized
+search, hydration, discovery and eligibility work; item concurrency also defaults
+to 4. Tests must not justify new settings, raising caps, hybrid eligibility or new bulk
+APIs. Metadata/groups may compete, fairness/backoff still apply, and HTTP cap 1
+serializes reads; this is not preemption or a fixed-latency guarantee. No measured
+speedup is claimed for this scheduling change. For a separately authorized
 live read measurement, distinguish source reads, each source commit, time to first
 cards, options-ready time and total job duration, and origin-cumulative request
 counters from per-job counts; see [safe logs](troubleshooting.md#refresh-timing-and-safe-logs).
@@ -202,8 +208,8 @@ belong in measurement reports.
 ### Measured local refresh example
 
 This historical comparison predates contract 1.4's complete refresh-time choice
-discovery **and v1.5 ticket-first independent publications**. It is **not a measurement
-of the current cache implementation or evidence of a v1.5 speedup**.
+discovery, v1.5 independent publications and v1.6 ticket-favoring concurrency. It is
+**not a measurement of the current implementation or evidence of a v1.6 speedup**.
 An authorized live comparison on 2026-11-09 used the then-default limits with one Jira
 source and one GitHub source: 60 unique Jira candidates and 14 PRs, producing
 49 Jira cards, 14 PR cards and 7 sprints.
@@ -225,7 +231,7 @@ These are individual workload/network observations, not a benchmark guarantee or
 a suggested rate-limit allowance. In earlier runs of the same optimization, total
 refresh took 13–14 s; provider latency also varies between runs. Use source
 read-stage logs to separate work from publication waiting in that historical design;
-current v1.5 sources publish independently and options have separate timing.
+current sources publish independently and options have separate timing.
 
 For offline contract/schema/example validation, with Python `jsonschema` and
 `openapi-spec-validator` installed in an isolated environment:

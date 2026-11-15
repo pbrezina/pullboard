@@ -233,3 +233,203 @@ test('mid-job tickets, indeterminate groups, exact project checks and independen
   await expect(page.getByRole('progressbar')).toHaveCount(0);
   expect((await health.boundingBox())!.height).toBeLessThan(60);
 });
+
+test('concurrent ticket, metadata and membership-gated checks keep the compact disclosure and independent create readiness', async ({
+  page,
+}) => {
+  let status: SyncStatus = {
+    ...sync('syncing'),
+    progress: sync().progress.map((p) => ({
+      ...p,
+      phase: 'fetching',
+      completed_items: 8,
+      total_items: 55,
+      finished_at: null,
+      elapsed_ms: 15000,
+    })),
+    jira_options: {
+      ...jiraOptionsStatus('syncing'),
+      ready: false,
+      health: { ...jiraOptionsStatus().health, status: 'pending', last_success_at: null },
+      progress: {
+        phase: 'discovering',
+        started_at: '2026-11-06T12:00:00Z',
+        finished_at: null,
+        elapsed_ms: 14000,
+        groups: [
+          { name: 'Reviewers', phase: 'completed', completed_items: 50, total_items: 50 },
+          { name: 'Contributors', phase: 'discovering', completed_items: 0, total_items: null },
+        ],
+        projects: [
+          { name: 'DEV', phase: 'queued', completed_items: 0, total_items: null },
+          { name: 'OPS', phase: 'queued', completed_items: 0, total_items: null },
+        ],
+      },
+    },
+  };
+  let boardReads = 0;
+  let optionReads = 0;
+  let draftReads = 0;
+  const submissions: Record<string, unknown>[] = [];
+  await page.route('**/api/**', (route) => {
+    const req = route.request();
+    switch (new URL(req.url()).pathname) {
+      case '/api/runtime-mode':
+        return route.fulfill({ json: runtimeMode() });
+      case '/api/health':
+        return route.fulfill({ json: { status: 'ok', version: '1.6', ...runtimeMode() } });
+      case '/api/context':
+        return route.fulfill({ json: context() });
+      case '/api/sync':
+        return route.fulfill({ json: status });
+      case '/api/board':
+        boardReads++;
+        return route.fulfill({ json: board({ revision: status.board_revision }) });
+      case '/api/jira/options':
+        optionReads++;
+        return route.fulfill({ json: options() });
+      case '/api/ticket-drafts':
+        draftReads++;
+        return route.fulfill({ json: draft() });
+      case '/api/jira/issues':
+        submissions.push(req.postDataJSON());
+        return route.fulfill({
+          json: {
+            outcome: 'simulated',
+            issue: null,
+            warnings: [],
+            message: 'Ticket creation simulated.',
+          },
+        });
+      default:
+        return route.fulfill({
+          status: 404,
+          json: { error: { code: 'not_found', message: 'Unknown path.' } },
+        });
+    }
+  });
+  await page.goto('/');
+  const health = page.locator('.health-panel');
+  const summary = health.locator(':scope > summary');
+  const jira = page.getByRole('region', { name: 'Jira health', exact: true });
+  const choices = jira.locator('.jira-options');
+  const heading = choices.locator('.options-heading');
+  const create = page.getByRole('button', { name: 'Create review ticket', exact: true });
+  await expect(create).toBeDisabled();
+  await expect(health).not.toHaveAttribute('open');
+  await expect(page.getByRole('progressbar')).toHaveCount(0);
+  await summary.focus();
+  await page.keyboard.press('Enter');
+  await expect(health).toHaveAttribute('open');
+  await expect(jira.locator('.chip')).toHaveText('fetching');
+  const tickets = jira.getByRole('progressbar', { name: 'Jira evaluated items' });
+  await expect(tickets).toHaveAttribute('aria-valuetext', 'fetching: 8 / 55');
+  await expect(heading).toContainText('Choices: discovering');
+  await expect(
+    choices.getByRole('progressbar', { name: 'Contributors group membership' }),
+  ).not.toHaveAttribute('value');
+  await expect(choices.getByText('0 / ?', { exact: true })).toHaveCount(3);
+  const checks = choices.getByRole('progressbar', { name: 'OPS project eligibility checks' });
+  await expect(checks).not.toHaveAttribute('value');
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  const reads = boardReads;
+
+  // Both complete groups are required before deduplicated project totals/checks appear.
+  status.jira_options = {
+    ...status.jira_options!,
+    progress: {
+      ...status.jira_options!.progress,
+      groups: status.jira_options!.progress.groups.map((g) => ({
+        ...g,
+        phase: 'completed',
+        completed_items: g.total_items ?? 40,
+        total_items: g.total_items ?? 40,
+      })),
+      projects: [
+        { name: 'DEV', phase: 'completed', completed_items: 75, total_items: 75 },
+        { name: 'OPS', phase: 'fetching', completed_items: 28, total_items: 75 },
+      ],
+    },
+  };
+  await expect(checks).toHaveAttribute('value', '28');
+  await expect(checks).toHaveAttribute('max', '75');
+  await expect(heading).toContainText('Choices: discovering');
+  await expect(choices.locator('.source-completed')).toHaveCount(3);
+  await expect(create).toBeDisabled();
+  await expect(health).toHaveAttribute('open');
+  await expect(health.locator('.source-diagnostics[open]')).toHaveCount(0);
+  await expect(page.locator('app-source-health > :not(.health-panel)')).toHaveCount(0);
+  await expect(choices.locator('progress')).toHaveCount(4);
+  await expect(choices.locator('.progress-time')).toHaveCount(0);
+  await expect(heading.getByText('14s', { exact: true })).toHaveCount(1);
+  for (const row of await health.locator('.progress-row').all()) {
+    expect((await row.boundingBox())!.height).toBe(24);
+  }
+  await page.getByRole('button', { name: 'Dark theme', exact: true }).click();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+  }
+  await page.setViewportSize({ width: 1440, height: 1080 });
+
+  // Even every project completing cannot expose a partial generation without metadata.
+  status.jira_options = {
+    ...status.jira_options!,
+    progress: {
+      ...status.jira_options!.progress,
+      projects: status.jira_options!.progress.projects.map((p) => ({
+        ...p,
+        phase: 'completed',
+        completed_items: 75,
+      })),
+    },
+  };
+  await expect(choices.locator('.source-completed')).toHaveCount(4);
+  await expect(heading).toContainText('Choices: discovering');
+  await expect(create).toBeDisabled();
+  expect(boardReads).toBe(reads);
+  expect(optionReads).toBe(0);
+  expect(draftReads).toBe(0);
+  expect(submissions).toHaveLength(0);
+
+  // The complete options-only publication enables an explicit create while cards still fetch.
+  status = {
+    ...status,
+    board_revision: 2,
+    jira_options: {
+      ...status.jira_options!,
+      ready: true,
+      health: jiraOptionsStatus().health,
+      progress: {
+        ...status.jira_options!.progress,
+        phase: 'completed',
+        finished_at: '2026-11-06T12:00:14Z',
+      },
+    },
+  };
+  await expect(heading).toContainText('Choices: ready');
+  await expect(page.getByText('Snapshot 2 / Updated', { exact: false })).toBeVisible();
+  await expect(jira.locator('.chip')).toHaveText('fetching');
+  await expect(tickets).toHaveAttribute('value', '8');
+  await expect(tickets.locator('..')).not.toHaveClass(/source-completed/);
+  await expect(summary).toContainText('Refresh in progress');
+  await expect(create).toBeEnabled();
+  await create.click();
+  const editor = page.getByRole('dialog', { name: 'Create review ticket' });
+  await expect(editor.getByRole('button', { name: 'Simulate creation' })).toBeEnabled();
+  expect(optionReads).toBe(1);
+  expect(draftReads).toBe(1);
+  expect(submissions).toHaveLength(0);
+  await editor.getByRole('button', { name: 'Simulate creation' }).click();
+  await expect(editor).toBeHidden();
+  expect(submissions).toHaveLength(1);
+  expect(submissions[0]['expected_mode_revision']).toBe('mode-test-1');
+  await summary.focus();
+  await page.keyboard.press('Space');
+  await expect(health).not.toHaveAttribute('open');
+  await expect(page.getByRole('progressbar')).toHaveCount(0);
+  expect((await health.boundingBox())!.height).toBeLessThan(60);
+});

@@ -168,7 +168,7 @@ actual work and duration. Each new job resets every source's progress; a coalesc
 request does not. Terminal progress stays until the next job and resets on restart;
 it is not persisted in SQLite or preferences.
 
-## Ticket-first scheduling and options progress
+## Ticket-favoring concurrency and options progress
 
 The default worker interval is **3600 seconds**. A manual refresh coalesces with an
 existing job; jobs do not overlap. Up to four source read futures run concurrently,
@@ -179,13 +179,27 @@ sprints and the real first configured project's key/name become available withou
 waiting for creation choices. That project's issue types may still be empty pending
 options metadata; a later project is never substituted.
 
-After Jira ticket work, creation metadata/statuses and complete group discovery can
-overlap remaining forge card reads. The **standalone lowest-priority eligibility
-batch starts only after all sources' card fetching has terminated and creation
-metadata/groups are complete**. Failed/backoff sources count as terminal for this
-barrier, not automatic options failures. One bounded queue checks project/account
-pairs across projects rather than finishing one project's batch before the next.
-All work belongs to the cancellable job; no detached batch or partial options commit.
+After Jira identity verification, ticket work, creation metadata/statuses and group
+discovery may run concurrently. Eligibility waits **only for the complete deduplicated
+membership candidate population**, not metadata or tickets. With no configured groups,
+the complete active-human candidate inventory is required instead; partial pages never
+start checks. One owned bounded queue spans project/account pairs, not sequential
+project batches or independent per-project queues.
+
+While **any configured card source is queued, preparing, discovering, fetching or
+publishing**, at most **one eligibility request/item** is in flight. A watch-driven
+scheduler automatically expands to the existing configured item concurrency once
+**all card attempts are completed, failed or backoff**, including skipped backoff.
+Card completion is not a gate to starting eligibility. This is not preemption or a
+fixed-latency guarantee: metadata/groups may compete, transport fairness/backoff still
+apply, and HTTP cap 1 naturally serializes reads.
+
+Reuse verified prerequisites and complete sprint reads without waiting for ticket
+hydration. Options may commit before tickets, but only as a complete atomic generation
+with their own full sprint snapshot. Branch-specific errors never cancel the other
+domain or undo its commit; shared identity/prerequisite/backoff failures propagate to
+each dependent domain honestly. All work belongs to the cancellable job; no detached
+checks or partial options commit.
 
 Jira's compact choices rows inside Source health report a shared phase/duration,
 group discovery and **per-project eligibility**, never ticket counts:
@@ -199,18 +213,23 @@ group discovery and **per-project eligibility**, never ticket counts:
   Then counters count finished project/account checks, **including negative
   eligibility results**, not retained assignees, pages or requests. Failed partial
   checks do not increment. A finished project row alone does not make options ready.
-- `preparing`/`discovering` cover metadata/groups, `fetching` is final eligibility,
-  and `publishing`/`completed` distinguish staging from the complete options commit.
-  No aggregate options percentage or fabricated metadata total is defined.
+- `preparing`/`discovering` cover metadata/groups and may overlap project checks once
+  all membership discovery is complete. All projects may finish while metadata is
+  still discovering. `fetching` means metadata/group discovery is complete with
+  eligibility outstanding, not an all-tickets barrier. `publishing`/`completed`
+  distinguish staging from the complete options commit. No aggregate options
+  percentage or fabricated metadata total is defined; rows do not expose in-flight
+  concurrency.
 - Options health and complete scoped choices persist independently of cards; readiness
   still requires current identity verification. Active timing and group/project progress
   are process-local and reset on restart/new jobs, like ticket progress.
 
-All stages retain the existing shared per-origin HTTP cap, default **4** requests,
-configurable in the single YAML; item concurrency also defaults to 4. Nested work
-never multiplies these limits. Pagination, body/time limits and backoff remain
-mandatory across both Jira domains. There is no raised cap, hybrid eligibility or
-new bulk API work, and no promised or measured speedup for this scheduling change.
+All work retains the existing shared per-origin HTTP cap, default **4** requests,
+configurable in the single YAML; item concurrency also defaults to 4. Actual YAML
+limits remain authoritative even after eligibility expands. Nested work never
+multiplies these limits. Pagination, body/time limits and backoff remain mandatory
+across both Jira domains. There is no new concurrency setting, raised cap, hybrid
+eligibility or new bulk API work, and no promised or measured speedup for this change.
 See [configured bounds](configuration.md#controls).
 
 A source failure does not cancel unrelated source reads; sources sharing an origin

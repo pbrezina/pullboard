@@ -108,6 +108,7 @@ class QuadletTests(unittest.TestCase):
             # Podman 4.x emits --user=UID:GID; newer generators split the value.
             arguments.extend(argument.split('=', 1) if argument.startswith('--') else [argument])
         self.assertEqual(arguments[arguments.index('--pull') + 1], 'newer')
+        self.assertEqual(arguments[arguments.index('--name') + 1], 'pullboard')
         self.assertEqual(arguments[arguments.index('--publish') + 1], '127.0.0.1:3333:8080')
         self.assertEqual(arguments[arguments.index('--user') + 1], '%U:%G')
 
@@ -115,7 +116,7 @@ class QuadletTests(unittest.TestCase):
         for separator in [' ', '=']:
             with self.subTest(separator=separator):
                 self.assert_container_command(
-                    f'/usr/bin/podman run --pull{separator}newer '
+                    f'/usr/bin/podman run --name{separator}pullboard --pull{separator}newer '
                     f'--publish{separator}127.0.0.1:3333:8080 --user{separator}%U:%G '
                     'ghcr.io/pbrezina/pullboard:latest')
 
@@ -135,6 +136,7 @@ class QuadletTests(unittest.TestCase):
         })
         # An exact allowlist also guards against adding session bus mounts/env or auto-update timers.
         self.assertEqual(dict(unit['Container']), {
+            'ContainerName': 'pullboard',
             'Image': 'ghcr.io/pbrezina/pullboard:latest',
             'Pull': 'newer',
             'PublishPort': '127.0.0.1:3333:8080',

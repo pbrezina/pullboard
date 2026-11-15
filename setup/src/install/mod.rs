@@ -118,7 +118,13 @@ fn template_settings(text: &str) -> Option<(u16, Channel)> {
     })?;
     [Channel::Stable, Channel::Nightly]
         .into_iter()
-        .find(|c| render_quadlet(port, *c).ok().as_deref() == Some(text))
+        .find(|c| {
+            render_quadlet(port, *c).is_ok_and(|rendered| {
+                rendered == text
+                    // Accept the previous exact template so setup can upgrade it.
+                    || rendered.replace("ContainerName=pullboard\n", "") == text
+            })
+        })
         .map(|channel| (port, channel))
 }
 
@@ -210,6 +216,7 @@ pub enum Command {
     ServiceStatus,
     GraphicalStatus,
     ContainerStatus,
+    LegacyContainerStatus,
     ContainerInventory,
     Pull(Channel),
     Reload,
@@ -350,12 +357,15 @@ impl<R: CommandRunner, P: ReadinessProbe> Installer<R, P> {
             return Ok(());
         }
         if state.existing_port == Some(port) && self.service(&state.paths, cancel).await?.running {
-            let output = self
-                .runner
-                .run(Command::ContainerStatus, Duration::from_secs(15), cancel)
-                .await?;
-            if output.success && runtime::owns_port(&output.stdout, port) {
-                return Ok(());
+            // A save-only upgrade can leave the previous container running until restart.
+            for command in [Command::ContainerStatus, Command::LegacyContainerStatus] {
+                let output = self
+                    .runner
+                    .run(command, Duration::from_secs(15), cancel)
+                    .await?;
+                if output.success && runtime::owns_port(&output.stdout, port) {
+                    return Ok(());
+                }
             }
         }
         Err(InstallError(
@@ -592,7 +602,7 @@ impl<R: CommandRunner, P: ReadinessProbe> Installer<R, P> {
             Ok(())
         } else {
             Err(InstallError(
-                "an unrelated or unverifiable systemd-pullboard container exists; preserve it and resolve the container name conflict manually",
+                "an unrelated or unverifiable pullboard container exists; preserve it and resolve the container name conflict manually",
             ))
         }
     }

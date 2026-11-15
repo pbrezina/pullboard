@@ -117,6 +117,16 @@ fn invocation(command: Command) -> Result<(&'static str, Vec<&'static str>), Ins
                 "--remote=false",
                 "container",
                 "inspect",
+                "pullboard",
+                "--format={{json .}}",
+            ],
+        ),
+        Command::LegacyContainerStatus => (
+            "podman",
+            vec![
+                "--remote=false",
+                "container",
+                "inspect",
                 "systemd-pullboard",
                 "--format={{json .}}",
             ],
@@ -127,7 +137,7 @@ fn invocation(command: Command) -> Result<(&'static str, Vec<&'static str>), Ins
                 "--remote=false",
                 "ps",
                 "--all",
-                "--filter=name=^systemd-pullboard$",
+                "--filter=name=^pullboard$",
                 "--format=json",
             ],
         ),
@@ -316,7 +326,7 @@ pub(super) fn container_name_safe(stdout: &str, existing_quadlet: bool) -> bool 
         && containers[0]
             .get("Names")
             .and_then(|n| n.as_array())
-            .is_some_and(|names| names.len() == 1 && names[0].as_str() == Some("systemd-pullboard"))
+            .is_some_and(|names| names.len() == 1 && names[0].as_str() == Some("pullboard"))
         && containers[0]
             .pointer("/Labels/PODMAN_SYSTEMD_UNIT")
             .and_then(|s| s.as_str())
@@ -473,6 +483,16 @@ mod tests {
         }
     }
     #[test]
+    fn container_checks_use_the_explicit_name_and_limit_legacy_inspection() {
+        let (_, args) = invocation(Command::ContainerStatus).unwrap();
+        assert!(args.contains(&"pullboard"));
+        assert!(!args.contains(&"systemd-pullboard"));
+        let (_, args) = invocation(Command::LegacyContainerStatus).unwrap();
+        assert!(args.contains(&"systemd-pullboard"));
+        let (_, args) = invocation(Command::ContainerInventory).unwrap();
+        assert!(args.contains(&"--filter=name=^pullboard$"));
+    }
+    #[test]
     fn commands_never_enable_or_shell_or_linger() {
         for command in [
             Command::PodmanInfo,
@@ -480,6 +500,7 @@ mod tests {
             Command::ServiceStatus,
             Command::GraphicalStatus,
             Command::ContainerStatus,
+            Command::LegacyContainerStatus,
             Command::ContainerInventory,
             Command::Pull(Channel::Stable),
             Command::Pull(Channel::Nightly),

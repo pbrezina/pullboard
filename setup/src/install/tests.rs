@@ -75,7 +75,7 @@ impl CommandRunner for FakeRunner {
                     format!("LoadState=loaded\nActiveState={}\nSourcePath={}\nFragmentPath=/run/user/{}/systemd/generator/pullboard.service\nInvocationID={:032x}\nDropInPaths=\n", if self.running.load(Ordering::SeqCst) { "active" } else { "inactive" }, self.paths.quadlet().display(), rustix::process::geteuid().as_raw(), self.invocation.load(Ordering::SeqCst))
                 } else { "LoadState=not-found\nActiveState=inactive\nSourcePath=\nFragmentPath=\nInvocationID=\n".into() }
             }
-            Command::ContainerStatus => serde_json::json!({"State":{"Running":true},"Config":{"Labels":{"PODMAN_SYSTEMD_UNIT":"pullboard.service"}},"NetworkSettings":{"Ports":{"8080/tcp":[{"HostIp":"127.0.0.1","HostPort":self.own_port.map(|p| p.to_string()).unwrap_or_default()}]}}}).to_string(),
+            Command::ContainerStatus | Command::LegacyContainerStatus => serde_json::json!({"State":{"Running":true},"Config":{"Labels":{"PODMAN_SYSTEMD_UNIT":"pullboard.service"}},"NetworkSettings":{"Ports":{"8080/tcp":[{"HostIp":"127.0.0.1","HostPort":self.own_port.map(|p| p.to_string()).unwrap_or_default()}]}}}).to_string(),
             Command::ContainerInventory => self.container_inventory.into(),
             Command::Reload => { if !self.skip_generation { self.present.store(true, Ordering::SeqCst); } String::new() }
             Command::Start | Command::Restart => {
@@ -175,6 +175,7 @@ fn assert_no_stages(paths: &Paths) {
 #[test]
 fn rendered_policy_matches_supplied_template_except_port_and_channel() {
     assert_eq!(render_quadlet(3333, Channel::Stable).unwrap(), TEMPLATE);
+    assert!(TEMPLATE.contains("\nContainerName=pullboard\n"));
     let rendered = render_quadlet(4567, Channel::Nightly).unwrap();
     assert_eq!(
         rendered
@@ -191,6 +192,90 @@ fn rendered_policy_matches_supplied_template_except_port_and_channel() {
         template_settings(&rendered.replace("ReadOnly=true", "ReadOnly=false")),
         None
     );
+}
+
+#[test]
+fn previous_exact_templates_remain_recognized_but_customizations_do_not() {
+    for channel in [Channel::Stable, Channel::Nightly] {
+        let legacy = render_quadlet(4567, channel)
+            .unwrap()
+            .replace("ContainerName=pullboard\n", "");
+        assert_eq!(template_settings(&legacy), Some((4567, channel)));
+        for custom in [
+            legacy.replace("ReadOnly=true", "ReadOnly=false"),
+            legacy.replace("[Container]\n", "[Container]\nContainerName=custom\n"),
+        ] {
+            assert_eq!(template_settings(&custom), None);
+        }
+    }
+}
+
+#[tokio::test]
+async fn running_legacy_container_can_upgrade_on_its_occupied_port() {
+    for (channel, save_only_first) in [
+        (Channel::Stable, false),
+        (Channel::Nightly, false),
+        (Channel::Stable, true),
+        (Channel::Nightly, true),
+    ] {
+        let (_temp, paths) = home();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let rendered = render_quadlet(port, channel).unwrap();
+        let legacy = rendered.replace("ContainerName=pullboard\n", "");
+        write_private(&paths.quadlet(), &legacy);
+        let mut installer = installer(paths.clone());
+        installer.runner.present.store(true, Ordering::SeqCst);
+        installer.runner.running.store(true, Ordering::SeqCst);
+        installer.runner.own_port = Some(port);
+        installer.runner.fail = Some(Command::ContainerStatus);
+        let cancel = CancellationToken::new();
+        let mut state = installer.inspect(paths.clone(), &cancel).await.unwrap();
+        assert_eq!(state.existing_port, Some(port));
+        assert_eq!(state.existing_channel, Some(channel));
+        if save_only_first {
+            let report = installer
+                .install(
+                    &state,
+                    "secret: config",
+                    port,
+                    channel,
+                    false,
+                    &cancel,
+                    |_| {},
+                )
+                .await;
+            assert!(report.files_saved && report.failure.is_none(), "{report:?}");
+            assert!(!report.service_job_requested);
+            state = installer.inspect(paths.clone(), &cancel).await.unwrap();
+        }
+        let report = installer
+            .install(
+                &state,
+                "secret: config",
+                port,
+                channel,
+                true,
+                &cancel,
+                |_| {},
+            )
+            .await;
+        assert!(report.files_saved && report.http_ready, "{report:?}");
+        assert!(report.failure.is_none());
+        assert_eq!(fs::read_to_string(paths.quadlet()).unwrap(), rendered);
+        assert_eq!(
+            fs::read_to_string(paths.quadlet_backup()).unwrap(),
+            if save_only_first { rendered } else { legacy }
+        );
+        assert!(
+            installer
+                .runner
+                .calls()
+                .contains(&Command::LegacyContainerStatus)
+        );
+        assert!(installer.runner.calls().contains(&Command::Restart));
+        assert!(!installer.runner.calls().contains(&Command::Start));
+    }
 }
 
 #[tokio::test]
@@ -985,7 +1070,7 @@ async fn unrelated_reserved_container_is_never_replaced_even_with_free_port() {
         let cancel = CancellationToken::new();
         let state = installer.inspect(paths.clone(), &cancel).await.unwrap();
         installer.runner.container_inventory =
-            r#"[{"Names":["systemd-pullboard"],"Labels":{"application":"other-user-work"}}]"#;
+            r#"[{"Names":["pullboard"],"Labels":{"application":"other-user-work"}}]"#;
         if appeared_later {
             let report = installer
                 .install(
@@ -1009,11 +1094,14 @@ async fn unrelated_reserved_container_is_never_replaced_even_with_free_port() {
 
 #[test]
 fn only_known_template_owned_container_name_can_be_reused() {
-    let owned =
-        r#"[{"Names":["systemd-pullboard"],"Labels":{"PODMAN_SYSTEMD_UNIT":"pullboard.service"}}]"#;
+    let owned = r#"[{"Names":["pullboard"],"Labels":{"PODMAN_SYSTEMD_UNIT":"pullboard.service"}}]"#;
     assert!(runtime::container_name_safe("[]", false));
     assert!(runtime::container_name_safe(owned, true));
     assert!(!runtime::container_name_safe(owned, false));
+    assert!(!runtime::container_name_safe(
+        &owned.replace("\"pullboard\"", "\"systemd-pullboard\""),
+        true
+    ));
     assert!(!runtime::container_name_safe("not-json SECRET_TOKEN", true));
     assert!(!runtime::container_name_safe("{}", true));
 }

@@ -5,6 +5,7 @@ PartOf=graphical-session.target
 AssertPathExists=%h/.config/pullboard/config.yaml
 
 [Container]
+ContainerName=pullboard
 Image=ghcr.io/pbrezina/pullboard:latest
 Pull=newer
 PublishPort=127.0.0.1:3333:8080

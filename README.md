@@ -48,6 +48,22 @@ Choose **Install and start**, then open <http://localhost:3333> (local access
 only). See the [setup guide](docs/src/setup.md) for prerequisites, token
 permissions and launcher security details.
 
+### Manage the container manually
+
+The setup wizard installs the `pullboard` container as the `pullboard.service`
+systemd user service. Run these commands as your ordinary user (no `sudo`):
+
+```sh
+systemctl --user start pullboard.service
+systemctl --user stop pullboard.service
+systemctl --user status pullboard.service
+```
+
+Use `systemctl --user restart pullboard.service` to restart it and
+`journalctl --user -u pullboard.service -n 100` to inspect recent logs. Manage the
+container through systemd rather than `podman start`/`stop` so service state stays
+in sync.
+
 ### Manual YAML and container option
 
 See the [manual setup guide](docs/src/quickstart.md#manual-yaml-and-container)

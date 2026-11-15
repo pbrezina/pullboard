@@ -119,9 +119,17 @@ async function mockApi(
           const issue = current.issues.find((item) => item.key === overrides.liveLink!.issueKey)!;
           issue.linked_pr_ids = [...new Set([...issue.linked_pr_ids, overrides.liveLink.prId])];
           pendingLiveLink = false;
+          current.revision++;
         }
         refreshRequested = true;
-        return route.fulfill({ status: 202, json: sync('syncing') });
+        return route.fulfill({
+          status: 202,
+          json: {
+            ...sync('syncing'),
+            board_revision: current.revision,
+            jira_options: overrides.empty ? null : sync('syncing').jira_options,
+          },
+        });
       }
       return route.fulfill({ status: 202, json: sync('syncing') });
     }
@@ -166,6 +174,8 @@ async function mockApi(
         return route.fulfill({
           json: {
             ...sync(),
+            board_revision: current.revision,
+            jira_options: overrides.empty ? null : sync().jira_options,
             sources: overrides.empty ? [] : current.sources,
             progress: overrides.empty ? [] : sync().progress,
           },
@@ -978,8 +988,11 @@ test('large cached assignee pool filters name/email locally with keyboard, bound
   };
   await page.route('**/api/sync', (route) =>
     route.request().method() === 'GET'
-      ? route.fulfill({ json: { ...sync(), sources: [health] } })
-      : route.fulfill({ status: 202, json: { ...sync('syncing'), sources: [health] } }),
+      ? route.fulfill({ json: { ...sync(), jira_options: { ...sync().jira_options, health } } })
+      : route.fulfill({
+          status: 202,
+          json: { ...sync('syncing'), jira_options: { ...sync('syncing').jira_options, health } },
+        }),
   );
   await page.goto('/');
   await page

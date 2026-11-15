@@ -8,7 +8,7 @@ import { BoardStore } from '../core/board-store';
 import { Preferences, preferenceKey } from '../core/preferences';
 import { RuntimeMode } from '../core/runtime-mode';
 import { defaultFilters, repositoryFilterValue } from '../core/board-logic';
-import { board, context, runtimeMode, upstreamIssue } from '../testing/fixtures';
+import { board, context, runtimeMode, upstreamIssue, sync } from '../testing/fixtures';
 
 describe('Upstream issue work list', () => {
   let http: HttpTestingController;
@@ -27,6 +27,7 @@ describe('Upstream issue work list', () => {
     });
     http = TestBed.inject(HttpTestingController);
     store = TestBed.inject(BoardStore);
+    store.sync.set(sync());
     store.board.set(
       board({
         upstream_issues: [

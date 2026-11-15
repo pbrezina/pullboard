@@ -1,0 +1,24 @@
+{
+  "state": "idle",
+  "started_at": "2026-11-09T12:00:00Z",
+  "finished_at": "2026-11-09T12:00:20Z",
+  "last_success_at": null,
+  "board_revision": 3,
+  "sources": [
+    {"source_id": "jira", "name": "Work Jira", "kind": "jira", "status": "ok", "last_success_at": "2026-11-09T12:00:12Z", "last_attempt_at": "2026-11-09T12:00:00Z", "error": null, "retry_at": null, "coverage_notes": []},
+    {"source_id": "work-github", "name": "Work GitHub", "kind": "github", "status": "ok", "last_success_at": "2026-11-09T12:00:10Z", "last_attempt_at": "2026-11-09T12:00:00Z", "error": null, "retry_at": null, "coverage_notes": []}
+  ],
+  "progress": [
+    {"source_id": "jira", "phase": "completed", "completed_items": 55, "total_items": 55, "started_at": "2026-11-09T12:00:00Z", "finished_at": "2026-11-09T12:00:12Z", "elapsed_ms": 12000},
+    {"source_id": "work-github", "phase": "completed", "completed_items": 23, "total_items": 23, "started_at": "2026-11-09T12:00:00Z", "finished_at": "2026-11-09T12:00:10Z", "elapsed_ms": 10000}
+  ],
+  "jira_options": {
+    "ready": false,
+    "health": {"source_id": "jira", "name": "Work Jira", "kind": "jira", "status": "error", "last_success_at": null, "last_attempt_at": "2026-11-09T12:00:12Z", "error": "Could not finish reading configured group membership.", "retry_at": null, "coverage_notes": []},
+    "progress": {
+      "phase": "failed", "started_at": "2026-11-09T12:00:12Z", "finished_at": "2026-11-09T12:00:20Z", "elapsed_ms": 8000,
+      "groups": [{"name": "example-group", "phase": "failed", "completed_items": 0, "total_items": null}],
+      "projects": [{"name": "IDM", "phase": "failed", "completed_items": 0, "total_items": null}, {"name": "RHEL", "phase": "failed", "completed_items": 0, "total_items": null}]
+    }
+  }
+}

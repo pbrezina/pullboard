@@ -3,10 +3,11 @@
 `api/openapi.json` is the normative OpenAPI 3.1 wire contract; `api/CONTRACT.md`
 explains its invariants. Both live in the repository and must be read before
 API-facing changes. This guide does not define an alternative payload format.
-The current contract is **v1.4.0**: nullable current project, refresh-time cached Jira
-choices, exposed assignee emails, per-type status inventories and explicit editor/
-dashboard defaults. Existing name-based create `status` fields and upstream-issue
-resolve/draft/create endpoints remain; this is not an alternate payload format.
+The current contract is **v1.5.0**: ticket-first independent source publications,
+`SyncStatus.board_revision` and separate nullable `SyncStatus.jira_options` health,
+readiness and progress. Complete atomic choice generations, existing name-based create
+`status` fields and upstream-issue resolve/draft/create endpoints remain. Consult the
+canonical contract files for exact schemas, required/null fields and ordering rules.
 
 | Method | Endpoint | Result |
 | --- | --- | --- |
@@ -15,9 +16,9 @@ resolve/draft/create endpoints remain; this is not an alternate payload format.
 | GET | `/api/runtime-mode` | `{read_only_test_mode, mode_revision}` shared by all clients |
 | POST | `/api/runtime-mode` | `{read_only_test_mode, expected_mode_revision}` → resulting mode/revision pair |
 | GET | `/api/board` | Single coherent snapshot, revision and source health |
-| GET | `/api/sync` | Worker status, live source health/backoff and per-source progress |
+| GET | `/api/sync` | Worker status, committed `board_revision`, live ticket-source health/progress and independent `jira_options` readiness/health/progress |
 | POST | `/api/sync` | `{}` requests/coalesces a refresh; 202 |
-| GET | `/api/jira/options?project_key=DEV&purpose=review&issue_type=Task&query=text` | Cached types/teams/statuses, all board active/future sprints, permitted assignees, purpose defaults/capabilities/diagnostics |
+| GET | `/api/jira/options?project_key=DEV&purpose=review&issue_type=Task&query=text` | Complete options generation's cached types/teams/statuses, board active/future sprints, permitted assignees, purpose defaults/capabilities/diagnostics |
 | POST | `/api/ticket-drafts` | Cached PR ID, purpose and optional project → editable proposal, no Jira writes |
 | POST | `/api/jira/issues` | Explicit create request including `expected_mode_revision` → created or simulated result |
 | POST | `/api/jira/issues/{issue_key}/links` | Cached PR ID plus `expected_mode_revision` → linked, duplicate or simulated result |
@@ -97,10 +98,18 @@ Illustrative fixtures live at `api/examples/{board-upstream-issues,upstream-reso
 
 ## Refresh and publication
 
+Each complete source snapshot publishes independently as soon as ready: Jira
+tickets/sprints together; each forge's PRs/upstream issues together. There is no
+partial page/item or final all-sources publication. Jira options are a separate
+complete atomic generation. Each transaction merges into latest committed state and
+reconciles links. Failure retains only its domain's scoped last-good data, never
+undoing another commit; principal/service/config scope quarantine applies to both
+card and options domains.
+
 `SourceHealth.status` is `pending|ok|error|backoff`, never `partial`. A successful
 refresh is always `ok`; `coverage_notes` are neutral information. Per-item
 `Attention.coverage: "partial"` remains independent. `Board.sources` describes the
-published snapshot; `SyncStatus.sources` can already report current failure/backoff
+published ticket/card snapshot only; `SyncStatus.sources` can already report current failure/backoff
 while its cards remain visible. A successful source is not green until publication.
 
 `SyncStatus.progress` has one entry per configured source, matching `sources` IDs
@@ -110,13 +119,39 @@ fetched/evaluated** issues/PRs, including candidates filtered out afterward, not
 cards or requests. Unknown workload is `null`, empty successful work is `0/0`.
 Forge counts include fully evaluated PRs **and** upstream issues, not just list rows.
 There is no aggregate percentage. Timing is monotonic source-attempt duration including
-publication waiting, excluding queue/skipped backoff. All progress is process-local.
+its own publication waiting, excluding queue/skipped backoff. Source counters/timing
+freeze at that source's commit even while the job continues. All progress is process-local.
 See [phase/reset/failure semantics](security-cache.md#per-source-progress) and the
 normative contract; examples live at `api/examples/sync-*.json` in the repository.
 
-`Board.revision` increases on atomic publication; `generated_at` is null before the
-first publication. Progress does not change that revision. A publication failure
-preserves the old board. Polling remains the transport, not streaming.
+`Board.revision` increases on every committed cache snapshot, including options-only,
+persisted health and scope quarantine/restoration commits; `generated_at` is null
+before the first publication. `SyncStatus.board_revision` reports that committed
+revision, not a work counter. Poll during `syncing` **and** idle; reload Board/Context
+on change, not only job completion. Read status first, consume a revision only after
+dependent reads succeed, retry failures and reject late regressive responses. Phases
+and revisions may be missed between polls. Preserve filters, deliberate sprint choices,
+dialog edits and captured mode revisions, with no automatic submission. Pure progress
+does not commit; a failed transaction advances no revision and preserves earlier
+successful commits.
+Polling remains the transport, not streaming.
+
+`SyncStatus.jira_options` is null only with Jira disabled. Otherwise its `ready`,
+independent persisted `health` and process-local `progress` describe choices, not cards.
+Complete retained stale scoped choices remain ready/usable; unverified, quarantined or
+absent generations do not. Group progress is indeterminate until full membership
+pagination/dedup completes. Project progress counts finished account eligibility checks,
+including negative results, with unknown totals until the deduplicated inventory is
+complete. No ticket counts, raw account rows or aggregate options percentage are added.
+
+Metadata/status and group discovery follow Jira ticket work. Final eligibility is a
+standalone lowest-priority bounded queue across project/account pairs, only after all
+source card fetching terminates and creation discovery completes. Repeated groups and
+overlapping accounts are deduplicated. The existing YAML-configurable shared per-origin
+HTTP cap (default 4), item cap (default 4), pagination, response/time bounds and backoff
+remain; no nested cap multiplication, raised cap or new hybrid/bulk APIs. The job stays
+syncing through options; `last_success_at` advances only when all configured ticket
+sources **and enabled Jira options** commit successfully, never on failure/skipped backoff.
 
 ## Runtime mode preconditions
 
@@ -175,7 +210,9 @@ sprint follow-up versus unsupported Atlassian Team discovery.
 `Context.jira_projects` preserves YAML project order. Required nullable
 `current_project` is the discovered **first configured** project, never a later
 available project or hardcoded IDM; it is null with Jira disabled/pending/unavailable
-discovery. `current_sprints` contains only active full-pattern matches, sorted by
+discovery. A minimal lookup can publish its real key/name early with `issue_types: []`
+until complete options metadata commits; project visibility does not confer readiness.
+`current_sprints` publishes with Jira tickets and contains only active regex search matches, sorted by
 case-insensitive name then ID for display, not selection priority. Board/options
 still return every active/future sprint. Header links set `selectedSprint` on trusted
 `board_url`, preserving other query parameters. Overview initially/reset selects an
@@ -192,12 +229,14 @@ not initially selected editor status. Every editor starts Unassigned/No sprint/n
 transition, including legacy configured `assignee: me`.
 
 Normal Jira refresh fully discovers choices for every allowed type/project and
-publishes them atomically with cards and effective policy in ephemeral SQLite.
+publishes them atomically with their own sprints and effective policy in an independent
+options generation in ephemeral SQLite, never merged with newer board sprints.
 Options/drafts/create never repeat group, per-user, metadata or status discovery.
 An active refresh leaves old complete choices usable. Failure retains the complete
-same-scope last-good generation with stale Jira `SourceHealth`; without an initial
-usable snapshot, fail with readiness/discovery errors. Group/policy changes apply
-at the next successful refresh. Final create uses the latest committed cache,
+same-scope last-good generation with stale `jira_options.health`, independently of
+ticket health; without an initial verified complete generation, creation fails closed
+with readiness/discovery errors. No optimistic assignment or partial pool exposure.
+Group/policy changes apply at the next successful options publication. Final create uses the latest committed cache,
 independent of the last query; current Jira permissions govern live writes.
 
 Create `status` remains an exact uniquely resolving cached **name**, not ID/free text;

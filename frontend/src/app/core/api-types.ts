@@ -1,4 +1,4 @@
-/** PullBoard v1.4 wire types. Keep in sync with api/openapi.json. */
+/** PullBoard v1.5 wire types. Keep in sync with api/openapi.json. */
 export type ForgeKind = 'github' | 'gitlab' | 'codeberg' | 'forgejo';
 export type SourceKind = ForgeKind | 'jira';
 export type Purpose = 'implementation' | 'review';
@@ -165,21 +165,43 @@ export interface SyncStatus {
   started_at: string | null;
   finished_at: string | null;
   last_success_at: string | null;
+  board_revision: number;
   sources: SourceHealth[];
   progress: SourceProgress[];
+  jira_options: JiraOptionsStatus | null;
+}
+export type SourcePhase =
+  | 'idle'
+  | 'queued'
+  | 'preparing'
+  | 'discovering'
+  | 'fetching'
+  | 'publishing'
+  | 'completed'
+  | 'failed'
+  | 'backoff';
+export interface ChoiceProgress {
+  name: string;
+  phase: SourcePhase;
+  completed_items: number;
+  total_items: number | null;
+}
+export interface JiraOptionsProgress {
+  phase: SourcePhase;
+  started_at: string | null;
+  finished_at: string | null;
+  elapsed_ms: number;
+  groups: ChoiceProgress[];
+  projects: ChoiceProgress[];
+}
+export interface JiraOptionsStatus {
+  ready: boolean;
+  health: SourceHealth;
+  progress: JiraOptionsProgress;
 }
 export interface SourceProgress {
   source_id: string;
-  phase:
-    | 'idle'
-    | 'queued'
-    | 'preparing'
-    | 'discovering'
-    | 'fetching'
-    | 'publishing'
-    | 'completed'
-    | 'failed'
-    | 'backoff';
+  phase: SourcePhase;
   completed_items: number;
   total_items: number | null;
   started_at: string | null;

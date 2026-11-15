@@ -6,7 +6,7 @@ import { BoardStore } from './board-store';
 import { board, context, sync, runtimeMode } from '../testing/fixtures';
 import type { SyncStatus } from './api-types';
 
-describe('BoardStore lightweight polling and publication races', () => {
+describe('BoardStore revision-aware polling and publication races', () => {
   let store: BoardStore;
   let http: HttpTestingController;
   beforeEach(() => {
@@ -18,150 +18,228 @@ describe('BoardStore lightweight polling and publication races', () => {
     http = TestBed.inject(HttpTestingController);
   });
   afterEach(() => {
-    http.verify();
-    TestBed.resetTestingModule();
-    vi.useRealTimers();
+    try {
+      http.verify();
+    } finally {
+      TestBed.resetTestingModule();
+      vi.useRealTimers();
+    }
   });
-  function flush(status: SyncStatus = sync(), revision = 1) {
+  const status = (revision = 1, state: SyncStatus['state'] = 'syncing'): SyncStatus => ({
+    ...sync(state),
+    board_revision: revision,
+  });
+  function dependencies(revision = 1) {
     http.expectOne('/api/context').flush(context());
-    http.expectOne('/api/sync').flush(status);
-    http.expectOne('/api/health').flush({ status: 'ok', version: '1.2', ...runtimeMode() });
+    http.expectOne('/api/health').flush({ status: 'ok', version: '1.5', ...runtimeMode() });
     http.expectOne('/api/board').flush(board({ revision }));
   }
-  it('loads once and reads board after sync, never before publication observation', () => {
+  function flush(s = status(), revision = s.board_revision) {
+    http.expectOne('/api/sync').flush(s);
+    dependencies(revision);
+  }
+  function poll(s: SyncStatus, delay = 2000) {
+    vi.advanceTimersByTime(delay);
+    http.expectOne('/api/sync').flush(s);
+  }
+  it('loads once, ordering both context and board after sync', () => {
     store.start();
     store.start();
-    expect(store.loading()).toBe(true);
+    http.expectNone('/api/context');
     http.expectNone('/api/board');
     flush();
     expect(store.loading()).toBe(false);
     expect(store.board()?.revision).toBe(1);
   });
-  it('polls only sync when unchanged and retains cards through fetching/publication', () => {
+  it('polls progress only without reloading unchanged publications, including publishing', () => {
     store.start();
-    flush(sync('syncing'));
+    flush();
     const old = store.board();
-    vi.advanceTimersByTime(2000);
-    const status = sync('syncing');
-    status.progress[0] = {
-      ...status.progress[0],
-      phase: 'fetching',
-      completed_items: 7,
-      total_items: null,
-      started_at: status.started_at,
-      elapsed_ms: 3000,
-    };
-    http.expectOne('/api/sync').flush(status);
-    http.expectNone('/api/board');
-    http.expectNone('/api/context');
-    expect(store.board()).toBe(old);
-    vi.advanceTimersByTime(2000);
-    http.expectOne('/api/sync').flush({
-      ...status,
-      progress: [{ ...status.progress[0], phase: 'publishing', total_items: 7 }],
-    });
-    http.expectNone('/api/board');
-    expect(store.board()).toBe(old);
+    for (const phase of ['fetching', 'publishing', 'completed'] as const) {
+      const s = status();
+      s.progress[0].phase = phase;
+      poll(s);
+      expect(store.board()).toBe(old);
+      http.expectNone('/api/board');
+      http.expectNone('/api/context');
+    }
   });
-  it('fetches publication when a follow-up started between polls, even without seeing idle', () => {
+  it('loads every observed mid-job commit and options-only/quarantine commits without phase changes', () => {
     store.start();
-    flush(sync('syncing'));
-    vi.advanceTimersByTime(2000);
-    const followup = { ...sync('syncing'), started_at: '2026-11-06T12:01:00Z' };
-    http.expectOne('/api/sync').flush(followup);
-    flush(followup, 2);
-    expect(store.board()?.revision).toBe(2);
-    vi.advanceTimersByTime(2000);
-    http.expectOne('/api/sync').flush(sync());
-    flush(sync(), 3);
+    flush();
+    for (const revision of [2, 4, 5]) {
+      const s = status(revision);
+      poll(s);
+      flush(s);
+      expect(store.board()?.revision).toBe(revision);
+      expect(store.sync()?.state).toBe('syncing');
+    }
+  });
+  it('detects missed completed/idle phases and follow-ups solely by revision', () => {
+    store.start();
+    flush();
+    const followup = { ...status(3), started_at: '2026-11-06T13:00:00Z' };
+    poll(followup);
+    flush(followup);
     expect(store.board()?.revision).toBe(3);
+    const idle = status(4, 'idle');
+    poll(idle);
+    flush(idle);
+    expect(store.board()?.revision).toBe(4);
+    poll(status(5, 'idle'), 30_000);
+    flush(status(5, 'idle'));
+    expect(store.board()?.revision).toBe(5);
   });
-  it('does not mask live failures with the old board successful health', () => {
+  it.each(['context', 'board'] as const)(
+    'does not consume a revision after failed %s reads; unchanged status retries',
+    (failed) => {
+      store.start();
+      flush();
+      const old = store.board(),
+        oldContext = store.context();
+      poll(status(2));
+      http.expectOne('/api/sync').flush(status(2));
+      const ctx = http.expectOne('/api/context');
+      if (failed === 'context')
+        ctx.flush(
+          { error: { code: 'read_failed', message: 'Read failed.' } },
+          { status: 503, statusText: 'Unavailable' },
+        );
+      else ctx.flush(context());
+      http.expectOne('/api/health').flush({ status: 'ok', version: '1.5', ...runtimeMode() });
+      const snapshot = http.expectOne('/api/board');
+      if (failed === 'board')
+        snapshot.flush(
+          { error: { code: 'read_failed', message: 'Read failed.' } },
+          { status: 503, statusText: 'Unavailable' },
+        );
+      else snapshot.flush(board({ revision: 2 }));
+      expect(store.board()).toBe(old);
+      expect(store.context()).toBe(oldContext);
+      expect(store.error()).toBe('Read failed.');
+      poll(status(2));
+      flush(status(2));
+      expect(store.board()?.revision).toBe(2);
+      expect(store.error()).toBe('');
+      poll(status(2));
+      http.expectNone('/api/context');
+    },
+  );
+  it('does not acknowledge a newer board as a newer context/status read', () => {
     store.start();
-    flush(sync('syncing'));
+    flush(status(1), 3);
+    poll(status(3));
+    flush(status(3));
+    expect(store.board()?.revision).toBe(3);
+    poll(status(3));
+    http.expectNone('/api/context');
+  });
+  it('retries the last observed target when the full-cycle status read fails', () => {
+    store.start();
+    flush();
+    poll(status(2));
+    http
+      .expectOne('/api/sync')
+      .flush(
+        { error: { code: 'read_failed', message: 'Status temporarily unavailable.' } },
+        { status: 503, statusText: 'Unavailable' },
+      );
+    dependencies(2);
+    expect(store.sync()?.board_revision).toBe(2);
+    expect(store.board()?.revision).toBe(2);
+    poll(status(2));
+    flush(status(2));
+    poll(status(2));
+    http.expectNone('/api/context');
+  });
+  it('discards regressing board/context responses without swallowing their target revision', () => {
+    store.start();
+    flush(status(1), 3);
+    const old = store.board(),
+      oldContext = store.context();
+    poll(status(4));
+    flush(status(4), 2);
+    expect(store.board()).toBe(old);
+    expect(store.context()).toBe(oldContext);
+    poll(status(4));
+    flush(status(4));
+    expect(store.board()?.revision).toBe(4);
+  });
+  it('allows a reinitialized cache after a fresh lower status revision, without ordering mode tokens', () => {
+    store.start();
+    flush(status(5));
+    poll(status(0));
+    flush(status(0));
+    expect(store.board()?.revision).toBe(0);
+    poll(status(0));
+    http.expectNone('/api/context');
+  });
+  it('preserves latest POST health and discards an older pending board/context cycle', () => {
+    store.start();
+    http.expectOne('/api/sync').flush(status());
+    http.expectOne('/api/context').flush(context());
+    http.expectOne('/api/health').flush({ status: 'ok', version: '1.5', ...runtimeMode() });
+    const lateBoard = http.expectOne('/api/board');
+    store.refresh();
+    store.refresh();
+    const current = status(2);
+    current.sources[0] = { ...current.sources[0], status: 'error', error: 'Current failure.' };
+    http.expectOne((r) => r.method === 'POST').flush(current);
+    lateBoard.flush(board());
+    expect(store.board()).toBeNull();
+    expect(store.sync()?.sources[0].error).toBe('Current failure.');
+    flush(current);
+    expect(store.board()?.revision).toBe(2);
+    expect(store.sync()?.sources[0].error).toBe('Current failure.');
+  });
+  it('ignores a late poll started before a newer POST', () => {
+    store.start();
+    flush();
     vi.advanceTimersByTime(2000);
-    const status = sync('syncing');
-    status.sources[0] = { ...status.sources[0], status: 'error', error: 'Read failed.' };
-    status.progress[0] = {
-      ...status.progress[0],
-      phase: 'failed',
-      finished_at: '2026-11-06T12:00:02Z',
-    };
-    http.expectOne('/api/sync').flush(status);
+    const late = http.expectOne((r) => r.method === 'GET' && r.url === '/api/sync');
+    store.refresh();
+    http.expectOne((r) => r.method === 'POST').flush(status(1, 'idle'));
+    late.flush(status());
+    expect(store.sync()?.state).toBe('idle');
+  });
+  it('retains current cards on live source failure without inventing a publication', () => {
+    store.start();
+    flush();
+    const s = status();
+    s.sources[0] = { ...s.sources[0], status: 'error', error: 'Read failed.' };
+    s.progress[0].phase = 'failed';
+    poll(s);
     expect(store.sync()?.sources[0].status).toBe('error');
     expect(store.board()?.sources[0].status).toBe('ok');
-    http.expectNone('/api/board');
+    http.expectNone('/api/context');
   });
-  it('allows write-triggered refresh coalescing during sync and does not miss finished POST', () => {
-    store.start();
-    flush(sync('syncing'));
-    store.refresh();
-    store.refresh();
-    const r = http.expectOne((r) => r.url === '/api/sync' && r.method === 'POST');
-    expect(r.request.body).toEqual({});
-    expect(r.request.headers.get('X-PullBoard-Request')).toBe('1');
-    r.flush(sync());
-    flush(sync(), 2);
-    expect(store.board()?.revision).toBe(2);
-    expect(store.refreshing()).toBe(false);
-  });
-  it('retains last good board after failure and retries without overlapping reads', () => {
+  it('retries status failures without overlapping reads and allows explicit queued reload', () => {
     store.start();
     flush();
-    const old = store.board();
-    store.load();
-    store.load();
-    http.expectOne('/api/context').flush(context());
-    http.expectOne('/api/sync').flush(sync());
-    http.expectOne('/api/health').flush({ status: 'ok', version: '1.2', ...runtimeMode() });
+    vi.advanceTimersByTime(2000);
     http
-      .expectOne('/api/board')
+      .expectOne('/api/sync')
       .flush(
-        { error: { code: 'cache_failed', message: 'Cache unavailable.' } },
+        { error: { code: 'read_failed', message: 'Retry later.' } },
         { status: 503, statusText: 'Unavailable' },
       );
-    expect(store.board()).toBe(old);
-    expect(store.error()).toBe('Cache unavailable.');
+    expect(store.error()).toBe('Retry later.');
+    store.reload();
+    store.load();
     store.reload();
     flush();
+    flush();
     expect(store.error()).toBe('');
   });
-  it('automatically retries an unchanged finished publication after a transient board read failure', () => {
-    store.start();
-    flush(sync(), 1);
-    const old = store.board();
-    const published = {
-      ...sync(),
-      started_at: '2026-11-06T13:00:00Z',
-      finished_at: '2026-11-06T13:00:01Z',
-      last_success_at: '2026-11-06T13:00:01Z',
-    };
-    vi.advanceTimersByTime(30_000);
-    http.expectOne('/api/sync').flush(published);
-    http.expectOne('/api/context').flush(context());
-    http.expectOne('/api/sync').flush(published);
-    http.expectOne('/api/health').flush({ status: 'ok', version: '1.2', ...runtimeMode() });
-    http
-      .expectOne('/api/board')
-      .flush(
-        { error: { code: 'cache_failed', message: 'Transient cache read failed.' } },
-        { status: 503, statusText: 'Unavailable' },
-      );
-    expect(store.board()).toBe(old);
-    expect(store.error()).toBe('Transient cache read failed.');
-    vi.advanceTimersByTime(29_999);
-    http.expectNone('/api/sync');
-    vi.advanceTimersByTime(1);
-    http.expectOne('/api/sync').flush(published);
-    // Same status, no new upstream job or explicit retry: fetch again.
-    http.expectNone('/api/board');
-    flush(published, 2);
-    expect(store.board()?.revision).toBe(2);
-    expect(store.error()).toBe('');
-    vi.advanceTimersByTime(30_000);
-    http.expectOne('/api/sync').flush(published);
-    http.expectNone('/api/board');
-    http.expectNone('/api/context');
+  it('gates options readiness independently and handles no Jira', () => {
+    for (const ready of [false, true]) {
+      const s = status();
+      s.jira_options!.ready = ready;
+      store.sync.set(s);
+      expect(store.jiraOptionsReady()).toBe(ready);
+    }
+    store.sync.set({ ...status(), jira_options: null });
+    expect(store.jiraOptionsReady()).toBe(false);
   });
   it('surfaces refresh failures and cancels timers and pending requests on destruction', () => {
     store.refresh();
@@ -178,26 +256,5 @@ describe('BoardStore lightweight polling and publication races', () => {
     TestBed.resetTestingModule();
     expect(requests.every((r) => r.cancelled)).toBe(true);
     vi.advanceTimersByTime(60_000);
-  });
-  it('does not let an older full read mask live POST health while its board response is pending', () => {
-    store.start();
-    http.expectOne('/api/context').flush(context());
-    http.expectOne('/api/sync').flush(sync('syncing'));
-    http.expectOne('/api/health').flush({ status: 'ok', version: '1.2', ...runtimeMode() });
-    const oldBoard = http.expectOne('/api/board');
-    store.refresh();
-    const current = sync('syncing');
-    current.sources[0] = { ...current.sources[0], status: 'error', error: 'Current failure.' };
-    current.progress[0] = {
-      ...current.progress[0],
-      phase: 'failed',
-      finished_at: '2026-11-06T12:00:02Z',
-    };
-    http.expectOne((r) => r.method === 'POST').flush(current);
-    oldBoard.flush(board());
-    expect(store.sync()?.sources[0].error).toBe('Current failure.');
-    // Initial publication fingerprint differs; one queued reload reconciles cards.
-    flush(current);
-    expect(store.sync()?.sources[0].error).toBe('Current failure.');
   });
 });

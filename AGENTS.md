@@ -16,8 +16,10 @@ and tests rather than inventing alternate payloads.
 - Attention is per-thread and based exclusively on upstream timestamps. A user's
   reply or upstream resolution clears a thread; pushing a commit does not clear it.
   Flat PR discussion is one separate thread. Bot events do not create attention.
-- SQLite is an ephemeral cache, initialized without migrations. Replace snapshots
-  atomically. On source failure preserve that source's last good data and mark it stale.
+- SQLite is an ephemeral cache, initialized without migrations. Publish each complete
+  source card snapshot independently and atomically; Jira creation options are a separate
+  complete atomic generation. Failure retains only that domain's scoped last-good data
+  and marks its independent health stale; never undo another domain/source's commit.
 - Do not invent upstream data, Jira IDs, supported API coverage, or test results.
 - Rust application code forbids unsafe. Load the rust-skills skill for Rust work.
 - Angular uses current stable, standalone components, signals, Tailwind and CDK.
@@ -70,15 +72,34 @@ their assigned directories, preserve other work, and report actual tests and lim
 - Every PR/review/upstream ticket starts Unassigned, No sprint and Jira default/no
   transition. Legacy assignee: me is accepted but never preselects self. Optional
   blanks are normal; Jira-required values require explicit input. Review excludes self.
+- Refresh tickets first with bounded concurrency: verify identity once per source
+  attempt, publish complete Jira tickets/sprints and each forge's PRs/upstream issues
+  independently as ready. Creation metadata/statuses and complete group discovery follow
+  Jira ticket work; final eligibility starts only after all source card fetching and
+  creation discovery finish, using one bounded queue across project/account pairs.
+  Keep the shared per-origin HTTP cap (default 4; actual YAML may differ), pagination,
+  body/time/backoff bounds; nested work never multiplies limits. No hybrid/bulk API work.
 - Discover complete assignee pools, per-project/type metadata/statuses and effective
-  policy during normal Jira refresh; publish atomically with cards in ephemeral SQLite.
-  Options/drafts/create use one committed generation, never repeat group/user/metadata
-  discovery. Retain complete same-scope last-good choices as stale on refresh failure;
-  without an initial cache, fail closed. Group/policy changes apply next successful refresh.
-  Principal/service/config scope protection and secret redaction remain mandatory.
+  policy in the owned/cancellable background refresh, never options/drafts/create.
+  Publish choices atomically as one independent generation with its own sprint snapshot;
+  validate against one committed generation, never newer board sprints or partial pools.
+  Retain complete same-scope last-good choices as stale on options failure; without an
+  initial cache, fail closed. Policy changes apply next successful options publication.
+  Principal/service/config scope changes quarantine incompatible private data in both
+  domains immediately. No optimistic assignment; secret redaction remains mandatory.
+- SyncStatus.board_revision signals every committed cache snapshot, including options
+  and scope quarantine/restoration, while syncing. Poll clients must load mid-job
+  publications without losing filters, dialog edits or captured mode revisions.
+  Ticket progress freezes at its source commit; job success requires every ticket source
+  and Jira options to succeed. jira_options has independent persisted health/readiness
+  and process-local metadata/group/project-check progress, never ticket counts.
+- Discover the first YAML Jira project's real key/name with a minimal early lookup
+  if needed (issue_types may be empty until options metadata commits); publish current
+  sprints with Jira cards, without waiting for creation options or substituting a project.
 - Assignee search filters the full cached pool locally by name/username/exposed email,
   with one accessible virtualized combobox, Unassigned and keyboard navigation; no
-  options request per keystroke and no inferred emails. Use Jira source health for staleness.
+  options request per keystroke and no inferred emails. Use jira_options.health/readiness
+  for choices and Jira source health for tickets; options failure alone never fails tickets.
 - AI defaults to OpenAI model `gpt-6-luna`, passes this ID unchanged, supports
   Anthropic/Ollama, and falls back to an editable deterministic template on failure.
   AI sees only selected PR content, treats it as untrusted, and never executes tools.

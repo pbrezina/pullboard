@@ -74,11 +74,18 @@ prominent discussion excerpts. Full content remains available in details.
 During refresh, separate source progress panels above the board show actual phase,
 evaluated items and elapsed time; real failures/backoff remain visible there too.
 Healthy idle shows the green Source health summary, with completed counts/durations
-in its existing keyboard-expandable Details. Cards stay on the old snapshot until
-[atomic publication](security-cache.md#per-source-progress).
+in its existing keyboard-expandable Details. Each complete source publishes its own
+cards independently as soon as ready, freezing its progress while other work continues.
+Jira creation options have separate readiness/health and metadata, group and per-project
+eligibility progress; an options failure does not make fresh Jira cards stale. Initial
+creation waits for a verified complete options generation; stale complete choices remain
+usable. Polling loads commits mid-job without resetting filters or dialog edits. See
+[atomic publication and options progress](security-cache.md#ticket-first-scheduling-and-options-progress).
 Who-am-I shows verified identities and **Current project**: the real key/name of
 the first Jira project in YAML order, or **Not available yet** before discovery/with
-Jira disabled. A forge's draft project override does not change this header. Only
+Jira disabled. This real project and current sprints are discovered with ticket/display
+work, without waiting for creation metadata. A forge's draft project override does not
+change this header. Only
 pattern-matching active sprints appear here, with their end date when available;
 links set `selectedSprint` on the trusted configured-board URL, preserving its other
 parameters. No matching sprint and multiple-match ambiguity are explicit, not an

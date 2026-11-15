@@ -108,11 +108,7 @@ export class TicketDialog {
   readonly busy = signal(false);
   readonly error = signal('');
   readonly optionsError = signal('');
-  readonly jiraHealth = computed(
-    () =>
-      this.store.sync()?.sources.find((s) => s.source_id === 'jira') ??
-      this.store.board()?.sources.find((s) => s.source_id === 'jira'),
-  );
+  readonly jiraHealth = computed(() => this.store.sync()?.jira_options?.health);
   readonly staleChoices = computed(() => {
     const health = this.jiraHealth();
     return (
@@ -184,6 +180,7 @@ export class TicketDialog {
       this.busy() ||
       this.loading() ||
       this.optionsLoading() ||
+      !this.store.jiraOptionsReady() ||
       !this.options()?.capabilities.can_create ||
       !!this.optionsError() ||
       this.outcomeUnknown() ||
@@ -234,9 +231,7 @@ export class TicketDialog {
   constructor() {
     effect(() => {
       const previous = this.requestedRefresh();
-      const success = this.store
-        .board()
-        ?.sources.find((s) => s.source_id === 'jira')?.last_success_at;
+      const success = this.store.sync()?.jira_options?.health.last_success_at;
       if (previous !== null && success && success !== previous) {
         untracked(() => {
           this.requestedRefresh.set(null);
@@ -320,9 +315,7 @@ export class TicketDialog {
     this.loadOptions();
   }
   refreshChoices() {
-    this.requestedRefresh.set(
-      this.store.board()?.sources.find((s) => s.source_id === 'jira')?.last_success_at ?? '',
-    );
+    this.requestedRefresh.set(this.store.sync()?.jira_options?.health.last_success_at ?? '');
     this.store.refresh();
   }
   loadOptions() {

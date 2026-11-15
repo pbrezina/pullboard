@@ -1,4 +1,4 @@
-import { DestroyRef, inject, Service, signal } from '@angular/core';
+import { computed, DestroyRef, inject, Service, signal } from '@angular/core';
 import { catchError, finalize, forkJoin, of, Subscription, switchMap, map } from 'rxjs';
 import { Api, errorMessage } from './api';
 import type { Board, Context, Health, SyncStatus } from './api-types';
@@ -14,6 +14,7 @@ export class BoardStore {
   readonly loading = signal(false);
   readonly refreshing = signal(false);
   readonly error = signal('');
+  readonly jiraOptionsReady = computed(() => this.sync()?.jira_options?.ready === true);
   private started = false;
   private disposed = false;
   private timer?: ReturnType<typeof setTimeout>;
@@ -21,7 +22,9 @@ export class BoardStore {
   private write?: Subscription;
   private pendingRefresh = false;
   private poll?: Subscription;
-  private publication = '';
+  // Acknowledged status revision, not the possibly newer board response's revision:
+  // Context may have been sampled before that newer board commit.
+  private publication: number | null = null;
   private statusVersion = 0;
 
   constructor() {
@@ -54,14 +57,16 @@ export class BoardStore {
           return of(null);
         }),
       );
-    this.read = forkJoin({
-      context: recover(this.api.context()),
-      sync: recover(this.api.sync()),
-      health: recover(this.api.health()),
-    })
+    this.read = recover(this.api.sync())
       .pipe(
-        // Read the snapshot AFTER status: a concurrent commit must not let a
-        // pre-publication board consume a post-publication status fingerprint.
+        // BOTH dependent reads follow status; Context contains published identities,
+        // projects and sprints too. Never acknowledge a commit using an older read.
+        switchMap((sync) =>
+          forkJoin({
+            context: recover(this.api.context()),
+            health: recover(this.api.health()),
+          }).pipe(map((result) => ({ ...result, sync }))),
+        ),
         switchMap((result) =>
           recover(this.api.board()).pipe(map((board) => ({ ...result, board }))),
         ),
@@ -76,14 +81,31 @@ export class BoardStore {
         }),
       )
       .subscribe((result) => {
-        if (result.context) this.context.set(result.context);
-        if (result.board) this.board.set(result.board);
-        if (result.sync && statusVersion === this.statusVersion) {
-          this.sync.set(result.sync);
+        // POST may have observed a quarantine/new commit while this read was pending.
+        // Discard the whole older cycle, not just its status, and reconcile again.
+        if (statusVersion !== this.statusVersion) {
+          this.pendingRefresh = true;
+          return;
+        }
+        if (result.sync) this.sync.set(result.sync);
+        const current = this.board();
+        // Revisions order one cache lifetime only. A fresh, serialized status read
+        // below our acknowledged revision signals a reinitialized database; this
+        // is not inferred from runtime-mode tokens or a late board response.
+        const reinitialized =
+          result.sync && this.publication !== null && result.sync.board_revision < this.publication;
+        const usable =
+          result.board &&
+          (!current || reinitialized || result.board.revision >= current.revision) &&
+          (!result.sync || result.board.revision >= result.sync.board_revision);
+        if (usable && result.context && result.board) {
+          this.context.set(result.context);
+          this.board.set(result.board);
           // A status observation is not an acknowledgement: only a successful
-          // snapshot read ordered after it consumes this publication fingerprint.
+          // snapshot AND context read ordered after it consumes this revision.
           // On failure, unchanged future status polls must retry the full read.
-          if (result.board) this.publication = this.publicationKey(result.sync);
+          if (result.sync && result.board.revision >= result.sync.board_revision)
+            this.publication = result.sync.board_revision;
         }
         if (result.health) this.health.set(result.health);
         this.error.set([...new Set(errors)].join(' '));
@@ -122,22 +144,9 @@ export class BoardStore {
           );
     this.timer = setTimeout(() => this.pollStatus(), delay);
   }
-  private publicationKey(status: SyncStatus) {
-    // A follow-up can begin between polls: a new job also signals publication of
-    // its predecessor. Include per-source completion during worker finalization.
-    return JSON.stringify([
-      status.started_at,
-      status.finished_at,
-      status.last_success_at,
-      status.progress
-        .filter((p) => p.phase === 'completed')
-        .map((p) => [p.source_id, p.finished_at]),
-    ]);
-  }
   private acceptStatus(status: SyncStatus) {
-    const key = this.publicationKey(status);
     this.sync.set(status);
-    if (key !== this.publication) {
+    if (status.board_revision !== this.publication) {
       this.reload();
     }
   }

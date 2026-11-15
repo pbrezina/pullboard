@@ -148,6 +148,17 @@ export function board(overrides: Partial<Board> = {}): Board {
         retry_at: null,
         coverage_notes: [],
       },
+      {
+        source_id: 'jira',
+        name: 'Jira',
+        kind: 'jira',
+        status: 'ok',
+        last_success_at: '2026-11-06T12:00:00Z',
+        last_attempt_at: '2026-11-06T12:00:00Z',
+        error: null,
+        retry_at: null,
+        coverage_notes: [],
+      },
     ],
     ...overrides,
   };
@@ -244,6 +255,8 @@ export function sync(state: SyncStatus['state'] = 'idle'): SyncStatus {
     started_at: '2026-11-06T12:00:00Z',
     finished_at: state === 'idle' ? '2026-11-06T12:00:01Z' : null,
     last_success_at: state === 'idle' ? '2026-11-06T12:00:01Z' : null,
+    board_revision: 1,
+    jira_options: jiraOptionsStatus(state),
     sources: board().sources,
     progress: board().sources.map((s) => ({
       source_id: s.source_id,
@@ -254,6 +267,30 @@ export function sync(state: SyncStatus['state'] = 'idle'): SyncStatus {
       finished_at: state === 'idle' ? '2026-11-06T12:00:01Z' : null,
       elapsed_ms: state === 'idle' ? 1000 : 0,
     })),
+  };
+}
+export function jiraOptionsStatus(
+  state: SyncStatus['state'] = 'idle',
+): NonNullable<SyncStatus['jira_options']> {
+  return {
+    ready: true,
+    health: {
+      ...board().sources[0],
+      source_id: 'jira',
+      kind: 'jira',
+      name: 'Jira creation options',
+    },
+    progress: {
+      phase: state === 'idle' ? 'completed' : 'queued',
+      started_at: state === 'idle' ? '2026-11-06T12:00:00Z' : null,
+      finished_at: state === 'idle' ? '2026-11-06T12:00:01Z' : null,
+      elapsed_ms: state === 'idle' ? 1000 : 0,
+      groups: [],
+      projects:
+        state === 'idle'
+          ? [{ name: 'DEV', phase: 'completed', completed_items: 1, total_items: 1 }]
+          : [],
+    },
   };
 }
 export function options(purpose: JiraOptions['purpose'] = 'review'): JiraOptions {

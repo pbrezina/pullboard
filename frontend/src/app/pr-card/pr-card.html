@@ -114,7 +114,12 @@
       @if (!attentionMode() && pr().is_mine) {
         <button
           class="card-secondary-action"
-          [disabled]="!store.context()?.jira_projects?.length || !mode.value() || !!mode.error()"
+          [disabled]="
+            !store.jiraOptionsReady() ||
+            !store.context()?.jira_projects?.length ||
+            !mode.value() ||
+            !!mode.error()
+          "
           (click)="createRequested.emit({ pr: pr(), purpose: 'review' })"
         >
           Create review ticket
@@ -123,7 +128,12 @@
       @if (attentionMode()) {
         <button
           class="primary-button card-primary-action"
-          [disabled]="!store.context()?.jira_projects?.length || !mode.value() || !!mode.error()"
+          [disabled]="
+            !store.jiraOptionsReady() ||
+            !store.context()?.jira_projects?.length ||
+            !mode.value() ||
+            !!mode.error()
+          "
           (click)="createRequested.emit({ pr: pr(), purpose: 'review' })"
         >
           Create review ticket
@@ -131,7 +141,12 @@
       } @else {
         <button
           class="primary-button card-primary-action"
-          [disabled]="!store.context()?.jira_projects?.length || !mode.value() || !!mode.error()"
+          [disabled]="
+            !store.jiraOptionsReady() ||
+            !store.context()?.jira_projects?.length ||
+            !mode.value() ||
+            !!mode.error()
+          "
           (click)="createRequested.emit({ pr: pr(), purpose: 'implementation' })"
         >
           Create Jira ticket

@@ -100,7 +100,7 @@ async function sharedApi(browser: BrowserContext, long = false) {
       mode = value;
     },
     progress: (value: SyncStatus, nextRevision = revision) => {
-      status = value;
+      status = { ...value, board_revision: nextRevision };
       revision = nextRevision;
     },
     counts: () => ({ boardReads, creates, links, toggles, actionAttempts }),
@@ -366,7 +366,9 @@ test('honest per-source progress retains old cards and fetches missed follow-up 
   await expect(
     page.locator('.source-progress-grid').getByText('7 evaluated / total unknown'),
   ).toBeVisible();
-  await expect(page.getByRole('progressbar')).not.toHaveAttribute('value');
+  await expect(
+    page.getByRole('progressbar', { name: 'Work GitHub evaluated items' }),
+  ).not.toHaveAttribute('value');
   await expect(page.getByText('1m 5s', { exact: true })).toBeVisible();
   await page.screenshot({ path: 'test-results/source-progress.png', fullPage: true });
   expect(api.counts().boardReads).toBe(1);

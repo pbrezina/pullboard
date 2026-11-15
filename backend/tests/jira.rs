@@ -951,7 +951,7 @@ async fn search_rejection_or_incomplete_pagination_preserves_last_good_snapshot_
             ),
         };
         search_page(&server, failing_jql, None, 100, first).await;
-        let mut expected_pages = 1 + usize::from(failing_jql == MENTION_JQL);
+        let mut expected_pages = 1;
         if failure == "page_failed" {
             search_page(
                 &server,
@@ -1007,6 +1007,10 @@ async fn search_rejection_or_incomplete_pagination_preserves_last_good_snapshot_
             requests
                 .iter()
                 .filter(|r| r.url.path() == "/rest/api/3/search/jql")
+                .filter(|r| r
+                    .url
+                    .query_pairs()
+                    .any(|(key, value)| key == "jql" && value == failing_jql))
                 .count(),
             expected_pages,
             "{failure}"

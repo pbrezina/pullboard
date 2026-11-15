@@ -17,6 +17,12 @@ one matches; attention starts broad, including unscheduled work. New tickets sta
 **No sprint** and **Jira default — no transition**. See the
 [dashboard](docs/src/attention.md) and [ticket guide](docs/src/tickets-ai.md).
 
+Refresh publishes each complete source's cards as soon as ready, without waiting
+for slower sources or Jira creation choices. Jira choices have separate health and
+readiness: stale complete choices remain usable, while first-run creation waits for
+verified complete discovery. The existing shared HTTP limit still defaults to four
+requests per origin, configurable in YAML. See [refresh and freshness](docs/src/security-cache.md).
+
 ## Supported forges
 
 - GitHub

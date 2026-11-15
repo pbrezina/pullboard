@@ -66,12 +66,46 @@ def progress_invariants(value):
             raise ValueError("Publishing/completed must have fully fetched totals")
 
 
+def options_progress_invariants(value):
+    for collection in ("groups", "projects"):
+        rows = value[collection]
+        names = [row["name"] for row in rows]
+        if len(set(names)) != len(names):
+            raise ValueError("Options work row names must be unique within each domain")
+        for row in rows:
+            progress_invariants(row)
+            if row["completed_items"] and row["total_items"] is None:
+                raise ValueError("Eligibility checks require a complete known workload")
+    if value["phase"] in {"publishing", "completed"} and not value["projects"]:
+        raise ValueError("Complete options require all configured projects (nonempty in YAML)")
+
+
+def attempt_invariants(health, progress):
+    phases = {"completed": "ok", "failed": "error", "backoff": "backoff"}
+    phase = progress["phase"]
+    if phase in phases and health["status"] != phases[phase]:
+        raise ValueError("Terminal progress must match its own domain health")
+    if progress["started_at"] is not None:
+        if health["last_attempt_at"] != progress["started_at"]:
+            raise ValueError("Live attempt timestamp must match its own domain progress")
+    if phase == "completed" and health["last_success_at"] != progress["finished_at"]:
+        raise ValueError("Domain success timestamp must match its own committed completion")
+
+
+def options_status_invariants(value):
+    options_progress_invariants(value["progress"])
+    attempt_invariants(value["health"], value["progress"])
+
+
 def sync_invariants(value):
     sources = value["sources"]
     progress = value["progress"]
     ids = [source["source_id"] for source in sources]
     if len(set(ids)) != len(ids) or ids != [p["source_id"] for p in progress]:
         raise ValueError("Sources/progress must have identical unique ordered IDs")
+    jira = [source for source in sources if source["kind"] == "jira"]
+    if len(jira) > 1 or any((source["source_id"] == "jira") != (source["kind"] == "jira") for source in sources):
+        raise ValueError("Jira is one configured source with the reserved source_id jira")
     for source, entry in zip(sources, progress):
         progress_invariants(entry)
         phase = entry["phase"]
@@ -79,12 +113,26 @@ def sync_invariants(value):
             "queued", "preparing", "discovering", "fetching", "publishing"
         }:
             raise ValueError("Idle job cannot have queued/active progress")
-        health = {"completed": "ok", "failed": "error", "backoff": "backoff"}
-        if phase in health and source["status"] != health[phase]:
-            raise ValueError("Terminal progress must match live source health")
-        if entry["started_at"] is not None:
-            if source["last_attempt_at"] != entry["started_at"]:
-                raise ValueError("Live attempt timestamp must match progress")
+        attempt_invariants(source, entry)
+    options = value["jira_options"]
+    if options is not None:
+        options_status_invariants(options)
+        options_phase = options["progress"]["phase"]
+        card_fetching = {"idle", "queued", "preparing", "discovering", "fetching"}
+        jira_progress = next(entry for entry in progress if entry["source_id"] == "jira")
+        if options_phase in {"preparing", "discovering", "fetching", "publishing", "completed"}:
+            if jira_progress["phase"] in card_fetching:
+                raise ValueError("Creation discovery follows Jira card fetching")
+        if options_phase in {"fetching", "publishing", "completed"}:
+            if any(entry["phase"] in card_fetching for entry in progress):
+                raise ValueError("Final eligibility follows all source card fetching")
+    if value["state"] == "idle" and value["finished_at"] is not None:
+        required_phases = [entry["phase"] for entry in progress]
+        if options is not None:
+            required_phases.append(options["progress"]["phase"])
+        succeeded = all(phase == "completed" for phase in required_phases)
+        if succeeded != (value["last_success_at"] == value["finished_at"]):
+            raise ValueError("Job success requires every ticket and options domain to succeed")
 
 
 def board_invariants(value):
@@ -138,8 +186,12 @@ def validate_value(schema, value):
     }
     Draft202012Validator(wrapper, format_checker=FormatChecker()).validate(value)
     ref = schema.get("$ref", "")
-    if ref.endswith("/SourceProgress"):
+    if ref.endswith(("/SourceProgress", "/ChoiceProgress")):
         progress_invariants(value)
+    elif ref.endswith("/JiraOptionsProgress"):
+        options_progress_invariants(value)
+    elif ref.endswith("/JiraOptionsStatus"):
+        options_status_invariants(value)
     elif ref.endswith("/SyncStatus"):
         sync_invariants(value)
     elif ref.endswith("/Board"):
@@ -226,6 +278,10 @@ for name in (
 # Every new object is closed and every declared field (including nullable fields)
 # is required. Exercise missing/unknown fields independently of mode extraction.
 new_examples = {
+    "SyncStatus": documents["examples/sync-completed.json"],
+    "JiraOptionsStatus": documents["examples/sync-completed.json"]["jira_options"],
+    "JiraOptionsProgress": documents["examples/sync-completed.json"]["jira_options"]["progress"],
+    "ChoiceProgress": schemas["ChoiceProgress"]["examples"][0],
     "Context": documents["examples/context-current.json"],
     "JiraOptions": documents["examples/options-implementation.json"],
     "JiraDefaults": documents["examples/options-implementation.json"]["defaults"],
@@ -462,6 +518,228 @@ reject("SyncStatus", {**status, "finished_at": None})
 reject("SyncStatus", {**status, "started_at": None})
 reject("SyncStatus", {**status, "progress": [queued, *status["progress"][1:]]})
 
+# Ticket-first wire examples and cross-field rules, not an execution/concurrency test.
+options_active = documents["examples/sync-options-active.json"]
+options_failed = documents["examples/sync-options-failed.json"]
+options_unavailable = documents["examples/sync-options-unavailable.json"]
+options_discovering = documents["examples/sync-options-discovering.json"]
+options_status = options_active["jira_options"]
+options_progress = options_status["progress"]
+complete_options = status["jira_options"]
+complete_progress = complete_options["progress"]
+startup = documents["examples/sync-startup.json"]
+startup_options = startup["jira_options"]
+
+
+def accept(name, value):
+    global examples
+    validate_value(schema_for(name), value)
+    examples += 1
+
+
+# These paired fixtures deliberately freeze ticket timing at independent commits.
+# An options-only persisted-health commit advances the shared revision, not ticket
+# success or job success. Counts are mock checks (positive/negative), not pool sizes.
+if not (
+    options_active["progress"] == options_failed["progress"]
+    and options_active["sources"] == options_failed["sources"]
+    and options_active["board_revision"] < options_failed["board_revision"]
+    and options_active["last_success_at"] == options_failed["last_success_at"]
+    and options_failed["jira_options"]["ready"]
+    and not options_unavailable["jira_options"]["ready"]
+):
+    raise ValueError("Options failure fixtures must preserve committed tickets independently")
+if options_progress["projects"] != [
+    {"name": "IDM", "phase": "completed", "completed_items": 75, "total_items": 75},
+    {"name": "RHEL", "phase": "fetching", "completed_items": 28, "total_items": 75},
+]:
+    raise ValueError("Eligibility fixture must demonstrate per-project checks, not ticket counts")
+
+# Disabled Jira has no options object, no fake metadata/group sources. Restored
+# verified choices may be ready while process-local progress is still startup idle.
+forge_only = {
+    **options_active,
+    "sources": options_active["sources"][1:],
+    "progress": options_active["progress"][1:],
+    "jira_options": None,
+}
+accept("SyncStatus", forge_only)
+accept("SyncStatus", {
+    **startup, "board_revision": 25,
+    "jira_options": {**complete_options, "progress": startup_options["progress"]},
+})
+# A first options attempt is unavailable until full commit even with fresh cards.
+accept("SyncStatus", {
+    **options_active,
+    "jira_options": {
+        **options_status, "ready": False,
+        "health": {**options_status["health"], "status": "pending", "last_success_at": None},
+    },
+})
+# Stale complete options remain usable throughout a later active retry.
+accept("SyncStatus", {
+    **options_active,
+    "jira_options": {
+        **options_status,
+        "health": {**options_status["health"], "status": "error", "error": "Previous options discovery failed."},
+    },
+})
+accept("SyncStatus", {
+    **options_discovering,
+    "jira_options": {
+        **options_discovering["jira_options"],
+        "progress": {**options_discovering["jira_options"]["progress"], "phase": "preparing"},
+    },
+})
+# Metadata/groups may overlap remaining forge card reads; eligibility may not.
+overlapping_discovery = copy.deepcopy(options_discovering)
+overlapping_discovery["sources"][1]["last_success_at"] = "2026-11-09T11:00:30Z"
+overlapping_discovery["progress"][1].update({"phase": "fetching", "finished_at": None})
+accept("SyncStatus", overlapping_discovery)
+accept("SyncStatus", {
+    **options_active,
+    "jira_options": {
+        **options_status,
+        "progress": {**options_progress, "phase": "publishing", "projects": complete_progress["projects"]},
+    },
+})
+accept("JiraOptionsProgress", {
+    **options_progress, "groups": [],
+    "projects": [{"name": "IDM", "phase": "queued", "completed_items": 0, "total_items": 75}],
+})
+accept("JiraOptionsProgress", {
+    **complete_progress, "groups": [],
+    "projects": [{"name": "IDM", "phase": "completed", "completed_items": 0, "total_items": 0}],
+})
+accept("JiraOptionsProgress", {
+    **complete_progress,
+    "groups": [{"name": "empty-group", "phase": "completed", "completed_items": 0, "total_items": 0}],
+})
+# Skipped backoff resets progress without advancing persisted attempt/success.
+options_backoff = {
+    **complete_options,
+    "health": {
+        **complete_options["health"], "status": "backoff",
+        "error": "Upstream rate limit; retry after the indicated time.",
+        "retry_at": "2026-11-09T12:10:00Z",
+    },
+    "progress": {**startup_options["progress"], "phase": "backoff"},
+}
+accept("JiraOptionsStatus", options_backoff)
+accept("JiraOptionsStatus", {
+    **options_backoff, "ready": False,
+    "health": {**options_backoff["health"], "last_success_at": None},
+})
+accept("JiraOptionsStatus", {
+    **options_backoff,
+    "progress": {
+        **options_failed["jira_options"]["progress"], "phase": "backoff",
+        "projects": [
+            {**row, "phase": "backoff"} if row["phase"] == "failed" else row
+            for row in options_failed["jira_options"]["progress"]["projects"]
+        ],
+    },
+    "health": {**options_backoff["health"], "last_attempt_at": options_progress["started_at"]},
+})
+accept("JiraOptionsStatus", {
+    **options_unavailable["jira_options"],
+    "health": {**options_unavailable["jira_options"]["health"], "last_attempt_at": None},
+    "progress": {
+        **startup_options["progress"], "phase": "failed", "finished_at": "2026-11-09T12:00:20Z",
+    },
+})
+# An options-only successful commit also signals a new board revision. The wire
+# gate intentionally does not pretend to test SQLite atomicity or frontend races.
+accept("SyncStatus", {
+    **options_failed, "board_revision": options_failed["board_revision"] + 1,
+    "last_success_at": options_failed["finished_at"],
+    "jira_options": {
+        **complete_options,
+        "health": {
+            **complete_options["health"], "last_attempt_at": options_progress["started_at"],
+            "last_success_at": options_failed["finished_at"],
+        },
+        "progress": {
+            **complete_progress, "started_at": options_progress["started_at"],
+            "finished_at": options_failed["finished_at"], "elapsed_ms": 28000,
+        },
+    },
+})
+
+for invalid in (-1, 18446744073709551616, 1.5, "12", None, True):
+    reject("SyncStatus", {**status, "board_revision": invalid})
+    reject("Board", {**board, "revision": invalid})
+accept("SyncStatus", {**status, "board_revision": 18446744073709551615})
+accept("Board", {**board, "revision": 18446744073709551615})
+reject("SyncStatus", {**status, "jira_options": None})
+reject("SyncStatus", {**forge_only, "jira_options": options_status})
+reject("SyncStatus", {**options_failed, "last_success_at": options_failed["finished_at"]})
+reject("SyncStatus", {**status, "last_success_at": "2026-11-09T11:00:30Z"})
+reject("JiraOptionsStatus", {**options_status, "ready": False})
+reject("JiraOptionsStatus", {**startup_options, "ready": True})
+reject("JiraOptionsStatus", {**complete_options, "ready": "true"})
+for field, invalid in (("source_id", "jira-options"), ("kind", "github"), ("last_attempt_at", None)):
+    reject("JiraOptionsStatus", {**options_status, "health": {**options_status["health"], field: invalid}})
+reject("JiraOptionsStatus", {
+    **options_status, "health": {**options_status["health"], "last_attempt_at": "2026-11-09T12:00:00Z"},
+})
+reject("JiraOptionsStatus", {
+    **complete_options, "health": {**complete_options["health"], "last_success_at": "2026-11-09T11:00:30Z"},
+})
+reject("JiraOptionsStatus", {**options_failed["jira_options"], "health": options_status["health"]})
+reject("JiraOptionsStatus", {**options_backoff, "health": complete_options["health"]})
+for invalid in ("", " \t\n", None, 42):
+    reject("ChoiceProgress", {**options_progress["projects"][1], "name": invalid})
+for field, invalid in (("completed_items", -1), ("total_items", -1), ("total_items", 27), ("total_items", None), ("completed_items", True), ("phase", "invented")):
+    reject("ChoiceProgress", {**options_progress["projects"][1], field: invalid})
+reject("ChoiceProgress", {**options_progress["projects"][0], "completed_items": 74})
+reject("ChoiceProgress", {"name": "IDM", "phase": "queued", "completed_items": 1, "total_items": 75})
+reject("ChoiceProgress", {"name": "IDM", "phase": "failed", "completed_items": 28, "total_items": None})
+reject("JiraOptionsProgress", {**options_progress, "groups": options_progress["groups"] * 2})
+reject("JiraOptionsProgress", {**options_progress, "projects": options_progress["projects"] * 2})
+reject("JiraOptionsProgress", {**complete_progress, "projects": []})
+reject("JiraOptionsProgress", {**options_progress, "phase": "completed"})
+reject("JiraOptionsProgress", {**options_progress, "phase": "publishing"})
+reject("JiraOptionsProgress", {**options_progress, "started_at": None})
+reject("JiraOptionsProgress", {**options_progress, "finished_at": "2026-11-09T12:00:30Z"})
+reject("JiraOptionsProgress", {**options_progress, "elapsed_ms": -1})
+reject("JiraOptionsProgress", {
+    **options_failed["jira_options"]["progress"],
+    "projects": [{"name": "RHEL", "phase": "failed", "completed_items": 28, "total_items": None}],
+})
+reject("JiraOptionsProgress", {**options_progress, "phase": "queued"})
+reject("JiraOptionsProgress", {**options_progress, "phase": "failed", "finished_at": "2026-11-09T12:00:30Z"})
+reject("JiraOptionsProgress", {**options_backoff["progress"], "elapsed_ms": 100})
+reject("JiraOptionsProgress", {**options_backoff["progress"], "finished_at": "2026-11-09T12:00:30Z"})
+reject("JiraOptionsProgress", {
+    **options_progress, "groups": [{"name": "example-group", "phase": "discovering", "completed_items": 28, "total_items": 75}],
+})
+reject("JiraOptionsProgress", {
+    **options_progress, "groups": [{"name": "example-group", "phase": "fetching", "completed_items": 0, "total_items": 75}],
+})
+# No eligibility while a group is incomplete, metadata is still discovering, or
+# another source is fetching cards; no creation discovery ahead of Jira cards.
+reject("JiraOptionsProgress", {
+    **options_progress, "groups": options_discovering["jira_options"]["progress"]["groups"],
+})
+reject("JiraOptionsProgress", {
+    **options_discovering["jira_options"]["progress"], "projects": options_progress["projects"],
+})
+for source_id in ("jira", "work-github"):
+    invalid = copy.deepcopy(options_active)
+    entry = next(entry for entry in invalid["progress"] if entry["source_id"] == source_id)
+    entry.update({"phase": "fetching", "finished_at": None})
+    reject("SyncStatus", invalid)
+invalid = copy.deepcopy(options_discovering)
+invalid["progress"][0].update({"phase": "fetching", "finished_at": None})
+reject("SyncStatus", invalid)
+# Stale choices and newer display sprints are allowed to differ. This is not a
+# cross-response generation merge; options/draft/create validation uses its own cache.
+early_context = documents["examples/context-ticket-first.json"]
+if early_context["current_project"]["issue_types"] or not early_context["current_sprints"]:
+    raise ValueError("Early real project/sprints fixture must not require creation metadata")
+accept("Context", {**early_context, "current_sprints": []})
+
 simulation = schemas["CreateIssueResult"]["examples"][0]
 reject("CreateIssueResult", {**simulation, "issue": {
     "key": "FAKE-1", "url": "https://jira.example/browse/FAKE-1", "title": "Fake"
@@ -491,4 +769,4 @@ print(
     f"{len(schemas)} schemas; {refs} local references; {examples} valid examples; "
     f"{len(negative_cases)} rejected invalid cases."
 )
-print("Not tested: server compatibility, refresh-time cache I/O/atomicity/staleness/policy scope, upstream pagination/URL/SSRF enforcement, resolution-store lifecycle, Jira writes/direct-transition behavior, mode races/restarts or UI.")
+print("Not tested: server compatibility, independent SQLite publication/retention/quarantine, owned scheduling/concurrency/backoff/cancellation, upstream pagination/URL/SSRF enforcement, resolution-store lifecycle, Jira writes/direct-transition behavior, mode races/restarts or UI polling/accessibility.")

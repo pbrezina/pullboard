@@ -5,8 +5,18 @@ import { PrCard } from './pr-card';
 import type { PullRequest, Purpose } from '../core/api-types';
 import { BoardStore } from '../core/board-store';
 import { RuntimeMode } from '../core/runtime-mode';
-import { attention, board, context, issue, person, pr, runtimeMode } from '../testing/fixtures';
+import {
+  attention,
+  board,
+  context,
+  issue,
+  person,
+  pr,
+  runtimeMode,
+  sync,
+} from '../testing/fixtures';
 describe('PR card', () => {
+  beforeEach(() => TestBed.inject(BoardStore).sync.set(sync()));
   it('uses source identity to exclude self, shows draft state and supports non-drag linking', async () => {
     TestBed.inject(BoardStore).context.set(context());
     const f = TestBed.createComponent(PrCard);
@@ -287,6 +297,7 @@ describe('PR card', () => {
     expect(f.nativeElement.querySelector('.card-meta').textContent).not.toContain('Waiting since');
   });
   it('keeps labels, people and stale status without showing coverage warnings or notes', async () => {
+    TestBed.inject(BoardStore).sync.set(null);
     const store = TestBed.inject(BoardStore);
     store.board.set(
       board({

@@ -20,7 +20,7 @@
       }
     </select>
   </label>
-  <button type="submit" [disabled]="resolving() || unavailableMode()">
+  <button type="submit" [disabled]="resolving() || unavailableMode() || !store.jiraOptionsReady()">
     {{ resolving() ? 'Resolving…' : 'Clone to Jira' }}
   </button>
   <p id="issue-url-help" class="muted url-help">
@@ -110,7 +110,7 @@
             </div>
             <button
               class="small-button"
-              [disabled]="unavailableMode()"
+              [disabled]="unavailableMode() || !store.jiraOptionsReady()"
               (click)="clone(issue)"
               [attr.aria-label]="'Clone to Jira: ' + issue.title"
             >

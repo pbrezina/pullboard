@@ -84,7 +84,13 @@ export class UpstreamIssues {
     restoreFocus: boolean | HTMLElement = true,
   ) {
     const mode = captured ?? this.mode.value();
-    if (!mode || (!captured && this.mode.error()) || this.openingTicket) return;
+    if (
+      !mode ||
+      (!captured && this.mode.error()) ||
+      this.openingTicket ||
+      !this.store.jiraOptionsReady()
+    )
+      return;
     const origin = this.document.activeElement;
     const data: UpstreamTicketDialogData = {
       kind: 'upstream',
@@ -96,7 +102,12 @@ export class UpstreamIssues {
     this.openingTicket = true;
     try {
       const { TicketDialog } = await import('../ticket-dialog/ticket-dialog');
-      if (this.destroy.destroyed || this.dialog.openDialogs.length) return;
+      if (
+        this.destroy.destroyed ||
+        this.dialog.openDialogs.length ||
+        !this.store.jiraOptionsReady()
+      )
+        return;
       this.dialog.open(TicketDialog, {
         data,
         ariaLabelledBy: 'ticket-heading',

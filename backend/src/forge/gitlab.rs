@@ -131,7 +131,10 @@ impl Forge for Gitlab {
         })
     }
     async fn discover_with_progress(&self, progress: Progress) -> Result<SourceData> {
-        let me: User = self.http.get("user", &[]).await?;
+        self.discover_verified(self.identity().await?, progress)
+            .await
+    }
+    async fn discover_verified(&self, me: Identity, progress: Progress) -> Result<SourceData> {
         progress.discovering();
         let mut found = BTreeMap::new();
         for filter in ["author_id", "reviewer_id", "assignee_id"] {
@@ -142,7 +145,7 @@ impl Forge for Gitlab {
                     &[
                         ("scope", "all".into()),
                         ("state", "opened".into()),
-                        (filter, me.id.to_string()),
+                        (filter, me.account_id.clone()),
                     ],
                 )
                 .await?;
@@ -190,7 +193,7 @@ impl Forge for Gitlab {
                 found.insert((mr.project_id, mr.iid), mr);
             }
         }
-        let mut data=SourceData{coverage_notes:vec!["GitLab discovers open merge requests authored by, assigned to, or requesting review from the account, plus accessible account to-do references. Mention discovery depends on retained to-dos and permissions. Review-request history is inferred only from timestamped system notes, not MR updates; unavailable history has no fabricated timer.".into()],identity:Some(Identity{source_id:self.config.id.clone(),kind:Kind::Gitlab,account_id:me.id.to_string(),display_name:me.name.clone(),username:me.username.clone(),profile_url:me.person().url}),..Default::default()};
+        let mut data=SourceData{coverage_notes:vec!["GitLab discovers open merge requests authored by, assigned to, or requesting review from the account, plus accessible account to-do references. Mention discovery depends on retained to-dos and permissions. Review-request history is inferred only from timestamped system notes, not MR updates; unavailable history has no fabricated timer.".into()],identity:Some(me.clone()),..Default::default()};
         let project_ids: BTreeSet<_> = found.keys().map(|(project_id, _)| *project_id).collect();
         let projects: BTreeMap<_, _> = stream::iter(project_ids)
             .map(|project_id| async move {

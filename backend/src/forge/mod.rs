@@ -23,6 +23,15 @@ pub trait Forge: Send + Sync {
         self.discover_with_progress(Progress::default()).await
     }
     async fn discover_with_progress(&self, progress: Progress) -> Result<SourceData>;
+    /// Reuse the identity verified at this source attempt's start. Implementations
+    /// must not perform a second identity lookup while fetching the card snapshot.
+    async fn discover_verified(
+        &self,
+        _identity: Identity,
+        progress: Progress,
+    ) -> Result<SourceData> {
+        self.discover_with_progress(progress).await
+    }
     async fn issue(
         &self,
         _route: &crate::upstream::IssueRoute,

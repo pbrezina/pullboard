@@ -155,15 +155,18 @@ async fn progress_evolves_coherently_coalesces_counts_evaluated_items_and_waits_
     );
     assert_eq!(coalesced.progress[0].completed_items, 1);
     release1.add_permits(1);
-    let publishing = phase(&sync, 0, SourcePhase::Publishing).await;
-    assert_eq!(publishing.progress[0].phase, SourcePhase::Publishing);
+    let publishing = phase(&sync, 0, SourcePhase::Completed).await;
     assert_eq!(publishing.progress[0].total_items, Some(3));
-    assert!(publishing.sources[0].last_success_at.is_none());
-    assert!(cache.read().await.unwrap().board.pull_requests.is_empty());
+    assert!(publishing.sources[0].last_success_at.is_some());
+    assert_eq!(cache.read().await.unwrap().board.pull_requests.len(), 1);
     let revision = cache.read().await.unwrap().board.revision;
     tokio::time::sleep(std::time::Duration::from_millis(12)).await;
     let waiting = sync.status().await.unwrap();
-    assert!(waiting.progress[0].elapsed_ms > publishing.progress[0].elapsed_ms);
+    assert_eq!(
+        waiting.progress[0].elapsed_ms,
+        publishing.progress[0].elapsed_ms
+    );
+    assert_eq!(waiting.state, "syncing");
     assert_eq!(revision, cache.read().await.unwrap().board.revision);
     release2.add_permits(1);
     receive(&mut rx2, SourcePhase::Fetching).await;
@@ -326,13 +329,13 @@ async fn publication_failure_is_live_not_green_and_preserves_old_board_revision_
     receive(&mut rx2, SourcePhase::Discovering).await;
     release.add_permits(1);
     receive(&mut rx, SourcePhase::Fetching).await;
-    release.add_permits(1);
-    phase(&sync, 0, SourcePhase::Publishing).await;
     let old = serde_json::to_value(cache.read().await.unwrap().board).unwrap();
     let db = sqlx::SqlitePool::connect(c.server.database.to_str().unwrap())
         .await
         .unwrap();
     sqlx::query("CREATE TRIGGER fail_publication BEFORE UPDATE ON pullboard_snapshot_v1 BEGIN SELECT RAISE(FAIL, 'mock cache failure'); END").execute(&db).await.unwrap();
+    release.add_permits(1);
+    phase(&sync, 0, SourcePhase::Failed).await;
     release2.add_permits(1);
     receive(&mut rx2, SourcePhase::Fetching).await;
     release2.add_permits(1);
@@ -406,7 +409,14 @@ async fn early_source_failure_is_visible_before_board_publication_and_backoff_su
     assert_eq!(live.sources[0].status, "backoff");
     assert_eq!(live.progress[0].phase, SourcePhase::Backoff);
     let duration = live.progress[0].elapsed_ms;
-    assert_eq!(cache.read().await.unwrap().board.sources[0].status, "ok");
+    // Its independent health transaction may already have committed.
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while cache.read().await.unwrap().board.sources[0].status != "backoff" {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     assert_eq!(cache.read().await.unwrap().board.pull_requests.len(), 1);
     let db = sqlx::SqlitePool::connect(c.server.database.to_str().unwrap())
         .await
@@ -583,4 +593,17 @@ async fn all_five_real_adapters_succeed_with_neutral_notes_and_empty_work_and_ze
             .iter()
             .all(|r| r.method == "GET")
     );
+    let requests = server.received_requests().await.unwrap();
+    for (endpoint, expected) in [
+        ("/rest/api/3/myself", 1),
+        ("/user", 1),
+        ("/api/v4/user", 1),
+        ("/api/v1/user", 2),
+    ] {
+        assert_eq!(
+            requests.iter().filter(|r| r.url.path() == endpoint).count(),
+            expected,
+            "identity once per real source attempt: {endpoint}"
+        );
+    }
 }

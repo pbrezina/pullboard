@@ -17,6 +17,8 @@ use tokio::sync::Mutex;
 pub struct SourceData {
     #[serde(default)]
     pub jira_choices: Option<crate::jira::Metadata>,
+    #[serde(default)]
+    pub jira_project: Option<Project>,
     pub issues: Vec<JiraIssue>,
     pub pull_requests: Vec<PullRequest>,
     #[serde(default)]
@@ -30,6 +32,12 @@ pub struct SourceData {
 pub struct Snapshot {
     #[serde(default)]
     pub jira_choices: Option<crate::jira::Metadata>,
+    #[serde(default)]
+    pub jira_options_health: Option<SourceHealth>,
+    #[serde(default)]
+    pub jira_options_error_code: Option<String>,
+    #[serde(default)]
+    pub jira_project: Option<Project>,
     pub board: Board,
     pub identities: Vec<Identity>,
     pub issue_weblinks: Vec<(String, String)>,
@@ -45,7 +53,19 @@ pub struct Cache {
     writer: Mutex<()>,
     quarantine: Mutex<Snapshot>,
     config: Config,
+    committed: std::sync::RwLock<Committed>,
     pub(crate) resolutions: crate::upstream::Resolutions,
+}
+
+/// Small synchronous publication summary, sampled under the live status lock.
+/// Updated only after a successful SQLite commit, including quarantine commits.
+#[derive(Clone, Default)]
+pub(crate) struct Committed {
+    pub revision: u64,
+    pub sources: Vec<SourceHealth>,
+    pub scopes: std::collections::BTreeMap<String, String>,
+    pub options: Option<SourceHealth>,
+    pub options_ready: bool,
 }
 
 impl Cache {
@@ -80,6 +100,7 @@ impl Cache {
             writer: Mutex::new(()),
             quarantine: Mutex::new(Snapshot::default()),
             config: config.clone(),
+            committed: std::sync::RwLock::new(Committed::default()),
             resolutions: crate::upstream::Resolutions::default(),
         };
         *cache.quarantine.lock().await = cache.read().await.unwrap_or_default();
@@ -89,6 +110,10 @@ impl Cache {
             snapshot.board.revision = previous_revision.saturating_add(1);
         }
         snapshot.board.sources = cache.configured_sources();
+        snapshot.jira_options_health = cache.configured_options_health();
+        if previous_revision > 0 {
+            snapshot.board.generated_at = Some(Utc::now());
+        }
         cache
             .store(&snapshot)
             .await
@@ -105,6 +130,18 @@ impl Cache {
         }
         sources
     }
+    pub(crate) fn configured_options_health(&self) -> Option<SourceHealth> {
+        self.config
+            .jira
+            .as_ref()
+            .map(|_| source("jira", "Jira creation options", Kind::Jira))
+    }
+    pub(crate) fn committed(&self) -> Committed {
+        self.committed
+            .read()
+            .expect("cache summary lock poisoned")
+            .clone()
+    }
     /// Publish a principal before any other source read. Old private data is restored
     /// only after an exact principal/service/policy scope match, never on a read failure.
     pub async fn verify(&self, identity: Identity) -> Result<()> {
@@ -115,11 +152,10 @@ impl Cache {
         let id = &identity.source_id;
         let scope = self.scope(&identity)?;
         let mut snapshot = self.read().await?;
-        // Reverification of an unchanged Jira principal is not a publication.
+        // Reverification of an unchanged principal is not a publication.
         // Keep its identity/choices/cards/revision coherent until the full source
         // transaction commits; only bootstrap or quarantine may publish early.
-        if id == "jira"
-            && snapshot.source_accounts.get(id) == Some(&scope)
+        if snapshot.source_accounts.get(id) == Some(&scope)
             && snapshot.identities.iter().any(|i| {
                 i.source_id == *id && i.kind == identity.kind && i.account_id == identity.account_id
             })
@@ -141,6 +177,9 @@ impl Cache {
                 .retain(|i| &i.source_id != id);
             if id == "jira" {
                 snapshot.jira_choices = None;
+                snapshot.jira_options_health = self.configured_options_health();
+                snapshot.jira_options_error_code = None;
+                snapshot.jira_project = None;
                 snapshot.board.sprints.clear();
                 snapshot.issue_weblinks.clear();
             }
@@ -155,7 +194,6 @@ impl Cache {
         }
         if !snapshot.source_accounts.contains_key(id) && old.source_accounts.get(id) == Some(&scope)
         {
-            snapshot.board.generated_at = old.board.generated_at;
             snapshot.board.issues.extend(
                 old.board
                     .issues
@@ -178,7 +216,33 @@ impl Cache {
                     .cloned(),
             );
             if id == "jira" {
-                snapshot.jira_choices = old.jira_choices.clone();
+                snapshot.jira_choices = old.jira_choices.clone().filter(|_| {
+                    old.jira_options_health
+                        .as_ref()
+                        .is_some_and(|h| h.last_success_at.is_some())
+                });
+                snapshot.jira_project = old.jira_project.clone();
+                if snapshot.jira_choices.is_some() {
+                    snapshot.jira_options_health = old.jira_options_health.clone().map(|mut h| {
+                        if h.status == "ok" {
+                            h.status = "error".into();
+                            h.error = Some(
+                                "Cached choices restored; awaiting a successful refresh.".into(),
+                            );
+                        }
+                        h
+                    });
+                } else if let Some(previous) = &old.jira_options_health {
+                    let mut health = previous.clone();
+                    health.last_success_at = None;
+                    if health.status == "ok" {
+                        health = self
+                            .configured_options_health()
+                            .ok_or_else(Error::internal)?;
+                    }
+                    snapshot.jira_options_health = Some(health);
+                }
+                snapshot.jira_options_error_code = old.jira_options_error_code.clone();
                 snapshot.board.sprints = old.board.sprints.clone();
                 snapshot.issue_weblinks = old.issue_weblinks.clone();
             }
@@ -190,9 +254,10 @@ impl Cache {
                     .find(|s| &s.source_id == id),
                 old.board.sources.iter().find(|s| &s.source_id == id),
             ) {
-                h.last_success_at = previous.last_success_at;
-                h.coverage_notes = previous.coverage_notes.clone();
-                if h.last_success_at.is_some() {
+                let name = h.name.clone();
+                *h = previous.clone();
+                h.name = name;
+                if h.status == "ok" {
                     h.status = "error".into();
                     h.error = Some("Cached data restored; awaiting a successful refresh.".into());
                 }
@@ -205,6 +270,9 @@ impl Cache {
         old.source_accounts.remove(id);
         if id == "jira" {
             old.jira_choices = None;
+            old.jira_options_health = None;
+            old.jira_options_error_code = None;
+            old.jira_project = None;
             old.board.sprints.clear();
             old.issue_weblinks.clear();
         }
@@ -213,6 +281,7 @@ impl Cache {
         snapshot.identities.push(identity);
         reconcile_links(&mut snapshot);
         snapshot.board.revision = snapshot.board.revision.saturating_add(1);
+        snapshot.board.generated_at = Some(Utc::now());
         self.store(&snapshot).await
     }
     fn scope(&self, i: &Identity) -> Result<String> {
@@ -277,10 +346,43 @@ impl Cache {
         let json = serde_json::to_string(snapshot).map_err(|_| Error::internal())?;
         let mut tx = self.pool.begin().await.map_err(|_| Error::internal())?;
         sqlx::query("INSERT INTO pullboard_snapshot_v1(id,snapshot) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET snapshot=excluded.snapshot").bind(json).execute(&mut *tx).await.map_err(|_|Error::internal())?;
-        tx.commit().await.map_err(|_| Error::internal())
+        tx.commit().await.map_err(|_| Error::internal())?;
+        *self.committed.write().expect("cache summary lock poisoned") = Committed {
+            revision: snapshot.board.revision,
+            sources: snapshot.board.sources.clone(),
+            scopes: snapshot.source_accounts.clone(),
+            options: snapshot.jira_options_health.clone(),
+            options_ready: snapshot.jira_choices.is_some()
+                && snapshot
+                    .jira_options_health
+                    .as_ref()
+                    .is_some_and(|h| h.last_success_at.is_some()),
+        };
+        Ok(())
     }
-    pub async fn publish(&self, updates: Vec<SourceUpdate>) -> Result<Snapshot> {
-        self.publish_attempts(updates, &[]).await
+    pub async fn publish(&self, mut updates: Vec<SourceUpdate>) -> Result<Snapshot> {
+        // Standalone adapter convenience still respects the two publication domains.
+        let choices = updates
+            .iter_mut()
+            .find(|u| u.source_id == "jira")
+            .and_then(|u| u.result.as_mut().ok())
+            .and_then(|d| d.jira_choices.take());
+        let snapshot = self.publish_attempts(updates, &[]).await?;
+        if let Some(choices) = choices {
+            let mut health = snapshot
+                .jira_options_health
+                .clone()
+                .ok_or_else(Error::internal)?;
+            health.last_attempt_at = Some(Utc::now());
+            return self
+                .publish_options(
+                    snapshot.source_accounts.get("jira").map(String::as_str),
+                    Ok(choices),
+                    health,
+                )
+                .await;
+        }
+        Ok(snapshot)
     }
     pub(crate) async fn publish_attempts(
         &self,
@@ -288,6 +390,32 @@ impl Cache {
         live_health: &[SourceHealth],
     ) -> Result<Snapshot> {
         let _guard = self.writer.lock().await;
+        self.publish_locked(updates, live_health).await
+    }
+    /// Merge only this attempt's domain, and reject delayed results after quarantine.
+    pub(crate) async fn publish_source(
+        &self,
+        update: SourceUpdate,
+        health: SourceHealth,
+        expected_scope: Option<&str>,
+    ) -> Result<Snapshot> {
+        let _guard = self.writer.lock().await;
+        let snapshot = self.read().await?;
+        if snapshot
+            .source_accounts
+            .get(&update.source_id)
+            .map(String::as_str)
+            != expected_scope
+        {
+            return Err(Error::unavailable());
+        }
+        self.publish_locked(vec![update], &[health]).await
+    }
+    async fn publish_locked(
+        &self,
+        updates: Vec<SourceUpdate>,
+        live_health: &[SourceHealth],
+    ) -> Result<Snapshot> {
         let mut snapshot = self.read().await?;
         // Include skipped-backoff and prior publication-failure health, which may
         // be newer than the still-visible board. No successful timestamp is added
@@ -343,7 +471,9 @@ impl Cache {
                         .retain(|i| i.source_id != update.source_id);
                     snapshot.board.upstream_issues.extend(data.upstream_issues);
                     if update.source_id == "jira" {
-                        snapshot.jira_choices = data.jira_choices;
+                        if data.jira_project.is_some() {
+                            snapshot.jira_project = data.jira_project;
+                        }
                         snapshot.board.sprints = data.sprints;
                         snapshot.issue_weblinks = data.issue_weblinks;
                     }
@@ -398,6 +528,54 @@ impl Cache {
                 .cmp(&b.title.to_lowercase())
                 .then_with(|| a.id.cmp(&b.id))
         });
+        snapshot.board.revision = snapshot.board.revision.saturating_add(1);
+        snapshot.board.generated_at = Some(now);
+        self.store(&snapshot).await?;
+        Ok(snapshot)
+    }
+    /// Choices, policy, statuses and their sprint set commit as a separate generation.
+    pub(crate) async fn publish_options(
+        &self,
+        expected_scope: Option<&str>,
+        result: Result<crate::jira::Metadata>,
+        mut health: SourceHealth,
+    ) -> Result<Snapshot> {
+        let _guard = self.writer.lock().await;
+        let mut snapshot = self.read().await?;
+        if snapshot.source_accounts.get("jira").map(String::as_str) != expected_scope {
+            return Err(Error::unavailable());
+        }
+        let now = Utc::now();
+        match result {
+            Ok(metadata) => {
+                if !snapshot
+                    .identities
+                    .iter()
+                    .any(|i| i.source_id == "jira" && i.account_id == metadata.account_id)
+                {
+                    return Err(Error::unavailable());
+                }
+                snapshot.jira_choices = Some(metadata);
+                snapshot.jira_options_error_code = None;
+                health.status = "ok".into();
+                health.last_success_at = Some(now);
+                health.error = None;
+                health.retry_at = None;
+            }
+            Err(error) => {
+                snapshot.jira_options_error_code = Some(error.code.into());
+                health.status = if error.retry_at.is_some() {
+                    "backoff"
+                } else {
+                    "error"
+                }
+                .into();
+                health.error = Some(error.message.into());
+                health.retry_at = error.retry_at;
+            }
+        }
+        snapshot.jira_options_health = Some(health);
+        reconcile_links(&mut snapshot);
         snapshot.board.revision = snapshot.board.revision.saturating_add(1);
         snapshot.board.generated_at = Some(now);
         self.store(&snapshot).await?;
@@ -481,7 +659,7 @@ mod tests {
         });
         for _ in 0..30 {
             let s = cache.read().await.unwrap();
-            if s.board.generated_at.is_some() {
+            if s.board.sources[0].last_success_at.is_some() {
                 assert!(s.board.generated_at.is_some());
                 assert_eq!(s.board.sources[0].status, "ok");
             }

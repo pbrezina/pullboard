@@ -1,9 +1,10 @@
 //! Account-scoped Jira Cloud discovery. Only complete successful reads are cached.
 use super::*;
+use chrono::Utc;
 use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 
-/// Complete private refresh-time choices, stored in the same transaction as cards.
+/// Complete private refresh-time choices, published independently from cards.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metadata {
     pub account_id: String,
@@ -28,13 +29,23 @@ pub struct TypeMetadata {
     create_fields: BTreeMap<String, Field>,
     statuses: Vec<StatusChoice>,
 }
+#[derive(Clone, Copy)]
+struct ProjectDiscovery<'a> {
+    account: &'a str,
+    board: &'a Value,
+    sprint_available: bool,
+    team_field: Option<&'a Field>,
+    estimation_field: Option<&'a Field>,
+    type_gate: &'a tokio::sync::Semaphore,
+}
+type ProjectMetadata = (usize, Project, BTreeMap<String, TypeMetadata>);
 impl TypeMetadata {
     pub(super) fn permits(&self, field: &str) -> bool {
         self.create_fields.get(field).is_some_and(writable)
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Field {
+pub(super) struct Field {
     id: String,
     name: String,
     #[serde(default)]
@@ -124,6 +135,9 @@ fn schema(field: &Field, key: &str, value: &str) -> bool {
 fn sprint(field: &Field) -> bool {
     schema(field, "custom", "com.pyxis.greenhopper.jira:gh-sprint")
 }
+pub(super) fn ticket_sprint_field(fields: &[Field]) -> Result<Option<String>> {
+    Ok(unique(fields.iter().filter(|f| sprint(f)))?.map(|f| f.id.clone()))
+}
 fn writable(field: &Field) -> bool {
     field.operations.iter().any(|op| op == "set")
         // The type-specific create endpoint establishes the issue type's context.
@@ -193,25 +207,86 @@ impl Jira {
     /// Explicit refresh helper for standalone adapter consumers. Production uses Syncer.
     pub async fn refresh_metadata(&self) -> Result<()> {
         let cache = self.cache.get().ok_or_else(not_ready)?;
-        let result = self.discover().await;
-        let error = result.as_ref().err().cloned();
-        if let Err(error) = cache
-            .publish(vec![crate::cache::SourceUpdate {
-                source_id: "jira".into(),
-                result,
-            }])
-            .await
-        {
-            self.choice_failure(error.clone()).await;
-            return Err(error);
-        }
-        error.map_or(Ok(()), Err)
+        let attempt = Utc::now();
+        let initial_scope = cache.committed().scopes.get("jira").cloned();
+        let identity = self.identity().await;
+        let scope = cache
+            .committed()
+            .scopes
+            .get("jira")
+            .cloned()
+            .or(initial_scope);
+        let preparation = match &identity {
+            Ok(_) => self.prepare_tickets().await,
+            Err(error) => Err(error.clone()),
+        };
+        let tickets = match (&identity, &preparation) {
+            (Ok(identity), Ok(preparation)) => {
+                self.read_tickets(
+                    identity.clone(),
+                    preparation,
+                    crate::sync::Progress::default(),
+                )
+                .await
+            }
+            (Err(error), _) | (_, Err(error)) => Err(error.clone()),
+        };
+        let ticket_error = tickets.as_ref().err().cloned();
+        let sprints = tickets.as_ref().ok().map(|d| d.sprints.clone());
+        let mut ticket_health = cache
+            .committed()
+            .sources
+            .into_iter()
+            .find(|h| h.source_id == "jira")
+            .ok_or_else(not_ready)?;
+        ticket_health.last_attempt_at = Some(attempt);
+        let ticket_commit = cache
+            .publish_source(
+                crate::cache::SourceUpdate {
+                    source_id: "jira".into(),
+                    result: tickets,
+                },
+                ticket_health,
+                scope.as_deref(),
+            )
+            .await;
+        let mut health = cache.committed().options.ok_or_else(not_ready)?;
+        health.last_attempt_at = Some(Utc::now());
+        let choices = match &identity {
+            Ok(identity) => match self
+                .discover_choices(
+                    identity,
+                    preparation.as_ref().ok(),
+                    sprints.as_deref(),
+                    crate::sync::ChoiceReporter::default(),
+                )
+                .await
+            {
+                Ok(discovery) => {
+                    self.check_choices(discovery, crate::sync::ChoiceReporter::default())
+                        .await
+                }
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error.clone()),
+        };
+        let choice_error = choices.as_ref().err().cloned();
+        cache
+            .publish_options(scope.as_deref(), choices, health)
+            .await?;
+        ticket_commit?;
+        ticket_error.or(choice_error).map_or(Ok(()), Err)
     }
     pub(super) async fn choices(&self) -> Result<Metadata> {
         let account = self.account_id().await?;
         let cache = self.cache.get().ok_or_else(not_ready)?;
         let snapshot = cache.read().await?;
-        if let Some(choices) = snapshot.jira_choices.filter(|m| m.account_id == account) {
+        if snapshot
+            .jira_options_health
+            .as_ref()
+            .is_some_and(|h| h.last_success_at.is_some())
+            && let Some(choices) = snapshot.jira_choices.filter(|m| m.account_id == account)
+        {
             return Ok(choices);
         }
         if let Some(error) = &*self.metadata_error.lock().await {
@@ -222,12 +297,17 @@ impl Jira {
             });
         }
         if snapshot
-            .board
-            .sources
-            .iter()
-            .any(|s| s.source_id == "jira" && matches!(s.status.as_str(), "error" | "backoff"))
+            .jira_options_health
+            .as_ref()
+            .is_some_and(|s| matches!(s.status.as_str(), "error" | "backoff"))
         {
-            return Err(failed());
+            return Err(
+                if snapshot.jira_options_error_code.as_deref() == Some("jira_metadata_ambiguous") {
+                    ambiguous()
+                } else {
+                    failed()
+                },
+            );
         }
         Err(not_ready())
     }
@@ -270,14 +350,34 @@ impl Jira {
         }
         Err(failed())
     }
-    pub(super) async fn read_metadata(&self, account: &str) -> Result<Metadata> {
+    pub(super) async fn visible_fields(&self) -> Result<Vec<Field>> {
         // /field is intentionally the documented non-paginated visible-field API;
         // unlike /field/search it does not require Jira administrator permission.
-        let fields: Vec<Field> = self
-            .get("rest/api/3/field", &[])
+        self.get("rest/api/3/field", &[])
+            .await
+            .map_err(discovery_error)
+    }
+    pub(super) async fn display_project(&self, key: &str) -> Result<Project> {
+        let project: Value = self
+            .get(&format!("rest/api/3/project/{key}"), &[])
             .await
             .map_err(discovery_error)?;
-        let sprint_field = unique(fields.iter().filter(|f| sprint(f)))?.map(|f| f.id.clone());
+        if project.get("key").and_then(Value::as_str) != Some(key) {
+            return Err(failed());
+        }
+        let name = project
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|n| !n.trim().is_empty())
+            .ok_or_else(failed)?;
+        Ok(Project {
+            key: key.into(),
+            name: name.into(),
+            issue_types: vec![],
+        })
+    }
+    pub(super) async fn read_metadata(&self, account: &str, fields: &[Field]) -> Result<Metadata> {
+        let sprint_field = ticket_sprint_field(fields)?;
         let team_field = unique(
             fields
                 .iter()
@@ -307,7 +407,7 @@ impl Jira {
             sprint_field,
             assignees: BTreeMap::new(),
             sprints: vec![],
-            assignee_groups: self.config.assignee_groups.clone(),
+            assignee_groups: self.group_names(),
             team: self.config.team.clone(),
             policies: self
                 .config
@@ -324,306 +424,337 @@ impl Jira {
                 })
                 .collect(),
         };
-        for key in &self.config.projects {
-            let project: Value = self
-                .get(&format!("rest/api/3/project/{key}"), &[])
-                .await
-                .map_err(discovery_error)?;
-            if project.get("key").and_then(Value::as_str) != Some(key) {
-                return Err(failed());
-            }
-            let name = project
-                .get("name")
-                .and_then(Value::as_str)
-                .filter(|n| !n.is_empty())
-                .ok_or_else(failed)?;
-            let permissions: Value = self
-                .get(
-                    "rest/api/3/mypermissions",
-                    &[
-                        ("projectKey", key.clone()),
-                        (
-                            "permissions",
-                            "CREATE_ISSUES,EDIT_ISSUES,SCHEDULE_ISSUES,ASSIGN_ISSUES".into(),
-                        ),
-                    ],
-                )
-                .await
-                .map_err(discovery_error)?;
-            let permitted = |p: &str| {
-                permissions
-                    .pointer(&format!("/permissions/{p}/havePermission"))
-                    .and_then(Value::as_bool)
-                    == Some(true)
-            };
-            let follow_up = board.get("type").and_then(Value::as_str) == Some("scrum")
-                && metadata.sprint_field.is_some()
-                && permitted("EDIT_ISSUES")
-                && permitted("SCHEDULE_ISSUES");
-            let types = self
-                .values(
-                    &format!("rest/api/3/issue/createmeta/{key}/issuetypes"),
-                    &[],
-                )
+        // All project/type reads use the shared transport budget. A single type
+        // work gate prevents nested project inventories multiplying item limits.
+        let type_gate = tokio::sync::Semaphore::new(self.limits.max_concurrent_items);
+        let context = ProjectDiscovery {
+            account,
+            board: &board,
+            sprint_available: metadata.sprint_field.is_some(),
+            team_field,
+            estimation_field,
+            type_gate: &type_gate,
+        };
+        let mut projects: Vec<_> =
+            stream::iter(self.config.projects.clone().into_iter().enumerate())
+                .map(|(index, key)| self.read_project_metadata(index, key, context))
+                .buffer_unordered(self.limits.max_concurrent_items)
+                .try_collect()
                 .await?;
-            let mut names = BTreeSet::new();
-            let mut type_ids = BTreeSet::new();
-            let status_groups: Vec<Value> = self
-                .get(&format!("rest/api/3/project/{key}/statuses"), &[])
-                .await
-                .map_err(discovery_error)?;
-            for t in types {
+        projects.sort_by_key(|(index, _, _)| *index);
+        for (_, project, types) in projects {
+            metadata.types.insert(project.key.clone(), types);
+            metadata.projects.push(project);
+        }
+        Ok(metadata)
+    }
+    async fn read_project_metadata(
+        &self,
+        index: usize,
+        key: String,
+        context: ProjectDiscovery<'_>,
+    ) -> Result<ProjectMetadata> {
+        let ProjectDiscovery {
+            account,
+            board,
+            sprint_available,
+            team_field,
+            estimation_field,
+            type_gate,
+        } = context;
+        let key = &key;
+        let permission_params = [
+            ("projectKey", key.clone()),
+            (
+                "permissions",
+                "CREATE_ISSUES,EDIT_ISSUES,SCHEDULE_ISSUES,ASSIGN_ISSUES".into(),
+            ),
+        ];
+        let types_path = format!("rest/api/3/issue/createmeta/{key}/issuetypes");
+        let status_path = format!("rest/api/3/project/{key}/statuses");
+        let (project, permissions, types, status_groups): (_, Value, _, Vec<Value>) =
+            tokio::try_join!(
+                self.display_project(key),
+                self.get("rest/api/3/mypermissions", &permission_params,),
+                self.values(&types_path, &[]),
+                self.get(&status_path, &[]),
+            )
+            .map_err(discovery_error)?;
+        let permitted = |p: &str| {
+            permissions
+                .pointer(&format!("/permissions/{p}/havePermission"))
+                .and_then(Value::as_bool)
+                == Some(true)
+        };
+        let follow_up = board.get("type").and_then(Value::as_str) == Some("scrum")
+            && sprint_available
+            && permitted("EDIT_ISSUES")
+            && permitted("SCHEDULE_ISSUES");
+        let mut names = BTreeSet::new();
+        let mut type_ids = BTreeSet::new();
+        let mut type_metadata = BTreeMap::new();
+        let mut raw_fields: BTreeMap<String, Vec<Value>> = stream::iter(types.clone())
+            .map(|t| async move {
                 let id = t
                     .get("id")
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
                     .ok_or_else(failed)?;
-                let type_name = t
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                    .ok_or_else(failed)?;
-                if !names.insert(type_name.to_owned()) || !type_ids.insert(id.to_owned()) {
-                    return Err(ambiguous());
-                }
-                let matches: Vec<_> = status_groups
-                    .iter()
-                    .filter(|group| group.get("id").and_then(Value::as_str) == Some(id))
-                    .collect();
-                if matches.len() > 1 {
-                    return Err(ambiguous());
-                }
-                let group = matches.first().ok_or_else(failed)?;
-                if group.get("name").and_then(Value::as_str) != Some(type_name) {
-                    return Err(ambiguous());
-                }
-                let mut statuses = BTreeMap::<String, StatusChoice>::new();
-                for status in group
-                    .get("statuses")
-                    .and_then(Value::as_array)
-                    .ok_or_else(failed)?
-                {
-                    let status: StatusChoice =
-                        serde_json::from_value(status.clone()).map_err(|_| failed())?;
-                    if status.id.trim().is_empty() || status.name.trim().is_empty() {
-                        return Err(failed());
-                    }
-                    if statuses
-                        .get(&status.id)
-                        .is_some_and(|old| old.name != status.name)
-                    {
-                        return Err(ambiguous());
-                    }
-                    statuses.insert(status.id.clone(), status);
-                }
-                let mut statuses: Vec<_> = statuses.into_values().collect();
-                statuses.sort_by(|a, b| {
-                    a.name
-                        .to_lowercase()
-                        .cmp(&b.name.to_lowercase())
-                        .then_with(|| a.id.cmp(&b.id))
-                });
-                let values = self
+                let _permit = type_gate.acquire().await.map_err(|_| failed())?;
+                let fields = self
                     .values(
                         &format!("rest/api/3/issue/createmeta/{key}/issuetypes/{id}"),
                         &[],
                     )
                     .await?;
-                let create_fields: Vec<Field> = values
-                    .into_iter()
-                    .map(|mut v| {
-                        // Jira field metadata may contain both fieldId and key, but no id.
-                        let id = v.get("fieldId").or_else(|| v.get("key")).cloned();
-                        if let Some(o) = v.as_object_mut() {
-                            o.remove("fieldId");
-                            o.remove("key");
-                            if let Some(id) = id {
-                                o.insert("id".into(), id);
-                            }
-                        }
-                        serde_json::from_value(v).map_err(|_| failed())
-                    })
-                    .collect::<Result<_>>()?;
-                let mut ids = BTreeSet::new();
-                if create_fields.iter().any(|f| !ids.insert(&f.id)) {
+                Ok::<_, Error>((id.to_owned(), fields))
+            })
+            .buffer_unordered(self.limits.max_concurrent_items)
+            .try_collect()
+            .await?;
+        for t in types {
+            let id = t
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                .ok_or_else(failed)?;
+            let type_name = t
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(failed)?;
+            if !names.insert(type_name.to_owned()) || !type_ids.insert(id.to_owned()) {
+                return Err(ambiguous());
+            }
+            let matches: Vec<_> = status_groups
+                .iter()
+                .filter(|group| group.get("id").and_then(Value::as_str) == Some(id))
+                .collect();
+            if matches.len() > 1 {
+                return Err(ambiguous());
+            }
+            let group = matches.first().ok_or_else(failed)?;
+            if group.get("name").and_then(Value::as_str) != Some(type_name) {
+                return Err(ambiguous());
+            }
+            let mut statuses = BTreeMap::<String, StatusChoice>::new();
+            for status in group
+                .get("statuses")
+                .and_then(Value::as_array)
+                .ok_or_else(failed)?
+            {
+                let status: StatusChoice =
+                    serde_json::from_value(status.clone()).map_err(|_| failed())?;
+                if status.id.trim().is_empty() || status.name.trim().is_empty() {
+                    return Err(failed());
+                }
+                if statuses
+                    .get(&status.id)
+                    .is_some_and(|old| old.name != status.name)
+                {
                     return Err(ambiguous());
                 }
-                let points =
-                    estimation_field.and_then(|f| create_fields.iter().find(|c| c.id == f.id));
-                let team = team_field.and_then(|f| create_fields.iter().find(|c| c.id == f.id));
-                let sprint = unique(create_fields.iter().filter(|f| sprint(f)))?;
-                let mut selected = TypeMetadata {
-                    id: id.into(),
-                    points_field: None,
-                    sprint_field: None,
-                    team_field: None,
-                    team_values: BTreeMap::new(),
-                    teams: vec![],
-                    statuses,
-                    capabilities: CreateCapabilities {
-                        can_create: false,
-                        unassigned_allowed: false,
-                        story_points: capability(
-                            "unsupported",
-                            points.is_some_and(|f| f.required),
-                            "story_points",
-                        ),
-                        team: capability("unsupported", team.is_some_and(|f| f.required), "team"),
-                        sprint: capability(
-                            if follow_up {
-                                "follow_up"
-                            } else {
-                                "unsupported"
-                            },
-                            sprint.is_some_and(|f| f.required),
-                            "sprint",
-                        ),
-                        blockers: vec![],
-                    },
-                    create_fields: create_fields
-                        .iter()
-                        .map(|f| (f.id.clone(), f.clone()))
-                        .collect(),
-                };
-                if let Some(f) = points {
-                    if schema(f, "type", "number") && writable(f) {
-                        selected.points_field = Some(f.id.clone());
-                        selected.capabilities.story_points =
-                            capability("create", f.required, "story_points");
-                    } else {
-                        selected.capabilities.story_points =
-                            capability("unknown", f.required, "story_points");
-                    }
-                }
-                if let Some(f) = sprint {
-                    if schema(f, "type", "array") && schema(f, "items", "json") && writable(f) {
-                        // Jira's gh-sprint create setter accepts the numeric sprint ID
-                        // despite the read schema being an array of sprint objects.
-                        selected.sprint_field = Some(f.id.clone());
-                        selected.capabilities.sprint = capability("create", f.required, "sprint");
-                    } else if !follow_up {
-                        selected.capabilities.sprint = capability("unknown", f.required, "sprint");
-                    }
-                }
-                if let Some(f) = team {
-                    if schema(f, "type", "option")
-                        && schema(
-                            f,
-                            "custom",
-                            "com.atlassian.jira.plugin.system.customfieldtypes:select",
-                        )
-                        && writable(f)
-                    {
-                        selected.team_field = Some(f.id.clone());
-                        selected.capabilities.team = capability("create", f.required, "team");
-                        for option in f.allowed_values.as_ref().ok_or_else(failed)? {
-                            if option.get("disabled").and_then(Value::as_bool) == Some(true) {
-                                continue;
-                            }
-                            let option_id = option
-                                .get("id")
-                                .and_then(Value::as_str)
-                                .filter(|id| !id.is_empty())
-                                .ok_or_else(failed)?;
-                            let name = option
-                                .get("value")
-                                .and_then(Value::as_str)
-                                .filter(|n| !n.is_empty())
-                                .ok_or_else(failed)?;
-                            // Selection keys scope the option to the verified principal,
-                            // project, type and field, not a label supplied by the client.
-                            let mut hash = std::hash::DefaultHasher::new();
-                            (
-                                self.config.base_url.trim_end_matches('/'),
-                                account,
-                                key,
-                                id,
-                                &f.id,
-                                option_id,
-                                name,
-                            )
-                                .hash(&mut hash);
-                            let choice = format!("team-{:016x}", hash.finish());
-                            if selected
-                                .team_values
-                                .insert(choice.clone(), json!({"id":option_id}))
-                                .is_some()
-                            {
-                                return Err(ambiguous());
-                            }
-                            selected.teams.push(TeamChoice {
-                                id: choice,
-                                name: name.into(),
-                            });
+                statuses.insert(status.id.clone(), status);
+            }
+            let mut statuses: Vec<_> = statuses.into_values().collect();
+            statuses.sort_by(|a, b| {
+                a.name
+                    .to_lowercase()
+                    .cmp(&b.name.to_lowercase())
+                    .then_with(|| a.id.cmp(&b.id))
+            });
+            let values = raw_fields.remove(id).ok_or_else(ambiguous)?;
+            let create_fields: Vec<Field> = values
+                .into_iter()
+                .map(|mut v| {
+                    // Jira field metadata may contain both fieldId and key, but no id.
+                    let id = v.get("fieldId").or_else(|| v.get("key")).cloned();
+                    if let Some(o) = v.as_object_mut() {
+                        o.remove("fieldId");
+                        o.remove("key");
+                        if let Some(id) = id {
+                            o.insert("id".into(), id);
                         }
-                    } else {
-                        // Atlassian Team is not a select. No reliable UUID discovery
-                        // mechanism is implemented; never reuse select option IDs.
-                        selected.capabilities.team = capability("unsupported", f.required, "team");
                     }
+                    serde_json::from_value(v).map_err(|_| failed())
+                })
+                .collect::<Result<_>>()?;
+            let mut ids = BTreeSet::new();
+            if create_fields.iter().any(|f| !ids.insert(&f.id)) {
+                return Err(ambiguous());
+            }
+            let points = estimation_field.and_then(|f| create_fields.iter().find(|c| c.id == f.id));
+            let team = team_field.and_then(|f| create_fields.iter().find(|c| c.id == f.id));
+            let sprint = unique(create_fields.iter().filter(|f| sprint(f)))?;
+            let mut selected = TypeMetadata {
+                id: id.into(),
+                points_field: None,
+                sprint_field: None,
+                team_field: None,
+                team_values: BTreeMap::new(),
+                teams: vec![],
+                statuses,
+                capabilities: CreateCapabilities {
+                    can_create: false,
+                    unassigned_allowed: false,
+                    story_points: capability(
+                        "unsupported",
+                        points.is_some_and(|f| f.required),
+                        "story_points",
+                    ),
+                    team: capability("unsupported", team.is_some_and(|f| f.required), "team"),
+                    sprint: capability(
+                        if follow_up {
+                            "follow_up"
+                        } else {
+                            "unsupported"
+                        },
+                        sprint.is_some_and(|f| f.required),
+                        "sprint",
+                    ),
+                    blockers: vec![],
+                },
+                create_fields: create_fields
+                    .iter()
+                    .map(|f| (f.id.clone(), f.clone()))
+                    .collect(),
+            };
+            if let Some(f) = points {
+                if schema(f, "type", "number") && writable(f) {
+                    selected.points_field = Some(f.id.clone());
+                    selected.capabilities.story_points =
+                        capability("create", f.required, "story_points");
+                } else {
+                    selected.capabilities.story_points =
+                        capability("unknown", f.required, "story_points");
                 }
-                let assignee = create_fields.iter().find(|f| f.id == "assignee");
-                selected.capabilities.unassigned_allowed = assignee
-                    .is_some_and(|f| !f.required && writable(f))
-                    && permitted("ASSIGN_ISSUES");
-                if assignee.is_none_or(|f| !writable(f)) || !permitted("ASSIGN_ISSUES") {
-                    selected.capabilities.blockers.push(diagnostic("assignee_unsupported", "assignee_id", "Explicit assignment or unassignment is not supported for this project and type."));
+            }
+            if let Some(f) = sprint {
+                if schema(f, "type", "array") && schema(f, "items", "json") && writable(f) {
+                    // Jira's gh-sprint create setter accepts the numeric sprint ID
+                    // despite the read schema being an array of sprint objects.
+                    selected.sprint_field = Some(f.id.clone());
+                    selected.capabilities.sprint = capability("create", f.required, "sprint");
+                } else if !follow_up {
+                    selected.capabilities.sprint = capability("unknown", f.required, "sprint");
                 }
-                if !permitted("CREATE_ISSUES") {
+            }
+            if let Some(f) = team {
+                if schema(f, "type", "option")
+                    && schema(
+                        f,
+                        "custom",
+                        "com.atlassian.jira.plugin.system.customfieldtypes:select",
+                    )
+                    && writable(f)
+                {
+                    selected.team_field = Some(f.id.clone());
+                    selected.capabilities.team = capability("create", f.required, "team");
+                    for option in f.allowed_values.as_ref().ok_or_else(failed)? {
+                        if option.get("disabled").and_then(Value::as_bool) == Some(true) {
+                            continue;
+                        }
+                        let option_id = option
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty())
+                            .ok_or_else(failed)?;
+                        let name = option
+                            .get("value")
+                            .and_then(Value::as_str)
+                            .filter(|n| !n.is_empty())
+                            .ok_or_else(failed)?;
+                        // Selection keys scope the option to the verified principal,
+                        // project, type and field, not a label supplied by the client.
+                        let mut hash = std::hash::DefaultHasher::new();
+                        (
+                            self.config.base_url.trim_end_matches('/'),
+                            account,
+                            key,
+                            id,
+                            &f.id,
+                            option_id,
+                            name,
+                        )
+                            .hash(&mut hash);
+                        let choice = format!("team-{:016x}", hash.finish());
+                        if selected
+                            .team_values
+                            .insert(choice.clone(), json!({"id":option_id}))
+                            .is_some()
+                        {
+                            return Err(ambiguous());
+                        }
+                        selected.teams.push(TeamChoice {
+                            id: choice,
+                            name: name.into(),
+                        });
+                    }
+                } else {
+                    // Atlassian Team is not a select. No reliable UUID discovery
+                    // mechanism is implemented; never reuse select option IDs.
+                    selected.capabilities.team = capability("unsupported", f.required, "team");
+                }
+            }
+            let assignee = create_fields.iter().find(|f| f.id == "assignee");
+            selected.capabilities.unassigned_allowed =
+                assignee.is_some_and(|f| !f.required && writable(f)) && permitted("ASSIGN_ISSUES");
+            if assignee.is_none_or(|f| !writable(f)) || !permitted("ASSIGN_ISSUES") {
+                selected.capabilities.blockers.push(diagnostic("assignee_unsupported", "assignee_id", "Explicit assignment or unassignment is not supported for this project and type."));
+            }
+            if !permitted("CREATE_ISSUES") {
+                selected.capabilities.blockers.push(diagnostic(
+                    "create_permission_missing",
+                    "issue_type",
+                    "The current account cannot create issues in this project.",
+                ));
+            }
+            let handled: BTreeSet<&str> = [
+                // Core fields are checked independently for missing setters.
+                Some("project"),
+                Some("issuetype"),
+                Some("summary"),
+                Some("description"),
+                assignee.map(|f| f.id.as_str()),
+                selected.points_field.as_deref(),
+                selected.team_field.as_deref(),
+                selected.sprint_field.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            for field in ["project", "issuetype", "summary"] {
+                if !selected.permits(field) {
                     selected.capabilities.blockers.push(diagnostic(
-                        "create_permission_missing",
+                        "required_field_unsupported",
                         "issue_type",
-                        "The current account cannot create issues in this project.",
+                        "A core create field is missing or not writable for this type.",
                     ));
                 }
-                let handled: BTreeSet<&str> = [
-                    // Core fields are checked independently for missing setters.
-                    Some("project"),
-                    Some("issuetype"),
-                    Some("summary"),
-                    Some("description"),
-                    assignee.map(|f| f.id.as_str()),
-                    selected.points_field.as_deref(),
-                    selected.team_field.as_deref(),
-                    selected.sprint_field.as_deref(),
-                ]
-                .into_iter()
-                .flatten()
-                .collect();
-                for field in ["project", "issuetype", "summary"] {
-                    if !selected.permits(field) {
-                        selected.capabilities.blockers.push(diagnostic(
-                            "required_field_unsupported",
-                            "issue_type",
-                            "A core create field is missing or not writable for this type.",
-                        ));
-                    }
-                }
-                for f in &create_fields {
-                    if f.required
-                        && !f.has_default
-                        && (!handled.contains(f.id.as_str()) || !writable(f))
-                    {
-                        selected.capabilities.blockers.push(diagnostic("required_field_unsupported", "issue_type", "An upstream required field has no supported editor value or proven default."));
-                    }
-                }
-                selected.capabilities.can_create = selected.capabilities.blockers.is_empty();
-                selected
-                    .teams
-                    .sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
-                metadata
-                    .types
-                    .entry(key.clone())
-                    .or_default()
-                    .insert(type_name.into(), selected);
             }
-            metadata.projects.push(Project {
-                key: key.clone(),
-                name: name.into(),
-                issue_types: names.into_iter().collect(),
-            });
+            for f in &create_fields {
+                if f.required
+                    && !f.has_default
+                    && (!handled.contains(f.id.as_str()) || !writable(f))
+                {
+                    selected.capabilities.blockers.push(diagnostic("required_field_unsupported", "issue_type", "An upstream required field has no supported editor value or proven default."));
+                }
+            }
+            selected.capabilities.can_create = selected.capabilities.blockers.is_empty();
+            selected
+                .teams
+                .sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+            type_metadata.insert(type_name.into(), selected);
         }
-        Ok(metadata)
+        Ok::<_, Error>((
+            index,
+            Project {
+                key: key.clone(),
+                name: project.name,
+                issue_types: names.into_iter().collect(),
+            },
+            type_metadata,
+        ))
     }
     pub(super) async fn all_human_accounts(&self) -> Result<BTreeSet<String>> {
         let mut seen = BTreeSet::new();
@@ -669,46 +800,78 @@ impl Jira {
         Err(failed())
     }
     pub(super) async fn group_members(&self) -> Result<Option<BTreeSet<String>>> {
-        let groups: BTreeSet<_> = self.config.assignee_groups.iter().collect();
+        self.group_members_progress(crate::sync::ChoiceReporter::default())
+            .await
+    }
+    pub(super) fn group_names(&self) -> Vec<String> {
+        let mut seen = BTreeSet::new();
+        self.config
+            .assignee_groups
+            .iter()
+            .filter(|name| seen.insert((*name).clone()))
+            .cloned()
+            .collect()
+    }
+    pub(super) async fn group_members_progress(
+        &self,
+        progress: crate::sync::ChoiceReporter,
+    ) -> Result<Option<BTreeSet<String>>> {
+        let groups = self.group_names();
         if groups.is_empty() {
             return Ok(None);
         }
-        let mut members = BTreeSet::new();
-        for name in groups {
-            let matches = self
-                .values("rest/api/3/group/bulk", &[("groupName", name.clone())])
-                .await?;
-            let exact: Vec<_> = matches
-                .iter()
-                .filter(|g| g.get("name").and_then(Value::as_str) == Some(name))
-                .collect();
-            if exact.len() != 1 {
-                return Err(failed());
-            }
-            let id = exact[0]
-                .get("groupId")
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty())
-                .ok_or_else(failed)?;
-            let users = self
-                .values(
-                    "rest/api/3/group/member",
-                    &[
-                        ("groupId", id.into()),
-                        ("includeInactiveUsers", "false".into()),
-                    ],
-                )
-                .await?;
-            for u in users {
-                let u: User = serde_json::from_value(u).map_err(|_| failed())?;
-                if u.account_id.trim().is_empty() {
-                    return Err(failed());
+        let populations: Vec<BTreeSet<String>> = stream::iter(groups)
+            .map(|name| {
+                let progress = &progress;
+                async move {
+                    progress.group_started(&name);
+                    let matches = self
+                        .values("rest/api/3/group/bulk", &[("groupName", name.clone())])
+                        .await?;
+                    let exact: Vec<_> = matches
+                        .iter()
+                        .filter(|g| g.get("name").and_then(Value::as_str) == Some(name.as_str()))
+                        .collect();
+                    if exact.len() != 1 {
+                        return Err(failed());
+                    }
+                    let id = exact[0]
+                        .get("groupId")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty())
+                        .ok_or_else(failed)?;
+                    let users = self
+                        .values(
+                            "rest/api/3/group/member",
+                            &[
+                                ("groupId", id.into()),
+                                ("includeInactiveUsers", "false".into()),
+                            ],
+                        )
+                        .await?;
+                    let mut members = BTreeSet::new();
+                    let mut discovered = BTreeSet::new();
+                    for u in users {
+                        let u: User = serde_json::from_value(u).map_err(|_| failed())?;
+                        if u.account_id.trim().is_empty() {
+                            return Err(failed());
+                        }
+                        discovered.insert(u.account_id.clone());
+                        if u.eligible() {
+                            members.insert(u.account_id);
+                        }
+                    }
+                    progress.group_completed(
+                        &name,
+                        u64::try_from(discovered.len()).map_err(|_| failed())?,
+                    );
+                    Ok::<_, Error>(members)
                 }
-                if u.eligible() {
-                    members.insert(u.account_id);
-                }
-            }
-        }
+            })
+            .buffer_unordered(self.limits.max_concurrent_items)
+            .try_collect()
+            .await?;
+        let members = populations.into_iter().flatten().collect();
         Ok(Some(members))
     }
     pub async fn options(

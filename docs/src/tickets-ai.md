@@ -7,7 +7,7 @@ explicit create adds the upstream issue's web link; no comments/attachments or
 clone-state/duplicate search are included.
 
 1. Select a cached PR and choose an **implementation** or **review** ticket.
-2. After Jira discovery is ready, the backend resolves purpose defaults against
+2. After Jira creation options are ready, the backend resolves purpose defaults against
    discovered types/choices and prepares AI text or a deterministic template. This
    creates **no Jira issue**. Missing discovery is an error, not fake configured data.
    Review titles start as `Review <repo>/<prid>: <PR title>`, for example
@@ -46,8 +46,13 @@ screen, then assigns the real issue only after confirmed creation. Atlassian Tea
 UUID discovery is unsupported, distinct from supported AssignedTeam select options.
 Group union/project assignability permissions, refresh-time choice publication and
 request costs are described in [Jira](jira.md). A retained stale cache remains usable,
-with a quiet note and **Refresh Jira choices** action; no initial discovery means
-explicit not-ready/failure, not fabricated empty choices.
+with a quiet note and **Refresh Jira choices** action. Choice readiness/freshness comes
+from `SyncStatus.jira_options`, independently of ticket health: fresh cards do not mean
+creation is ready. Without a verified complete initial generation creation stays blocked,
+not fabricated empty choices or optimistic assignments. Each options generation includes
+its own sprints and effective policy; validation never borrows newer board sprints.
+Background publications preserve dialog edits and captured mode revisions, never submit
+automatically.
 
 The assignee control is one searchable accessible combobox with a virtualized list.
 It loads the full cached eligible pool before enabling selection, then filters name,

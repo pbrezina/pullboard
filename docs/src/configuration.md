@@ -58,6 +58,13 @@ Source identities, snapshots and health remain separate.
 Explicitly submitted Jira writes also use this admission budget; it never initiates
 or automatically retries writes.
 
+Ticket-first refresh uses these **existing** bounds for searches, hydration,
+creation discovery and the final eligibility queue. Nested work never multiplies
+the shared HTTP cap (default 4); the change adds no concurrency knob, raised cap,
+hybrid eligibility or new bulk APIs. Each complete source publishes independently;
+creation metadata/groups follow Jira ticket work, and eligibility waits for all source
+card fetching and creation discovery to finish. See [refresh scheduling](security-cache.md#ticket-first-scheduling-and-options-progress).
+
 For GitHub, effective batch size is
 `min(github_batch_size, max_concurrent_items)`; at most
 `floor(max_concurrent_items / effective_batch_size)` batches run concurrently.
@@ -133,12 +140,15 @@ entries clear suggestions. Empty maps change nothing. Workflow suggestions remai
 available in options metadata, not initially selected in the editor. Only an explicit
 status selection can request a post-create transition; sync never writes.
 
-Normal Jira refresh discovers the complete assignee/type/status/capability choices
-and publishes them with cards and effective policy in one cache generation. Dialogs,
-drafts and submissions use that committed cache, not repeated group/user/metadata
-discovery. Group/default-policy changes take effect only after a successful refresh;
-a failed refresh retains complete same-scope last-good choices, marked stale through
-Jira source health. No usable initial cache means ticket actions fail closed. See
+Normal Jira refresh discovers complete assignee/type/status/capability choices and
+publishes them with their own sprint snapshot and effective policy in one independent
+atomic options generation, not with cards. Dialogs, drafts and submissions use that
+committed generation, not repeated group/user/metadata discovery or newer board sprints.
+Group/default-policy changes take effect only after successful options publication;
+an options failure retains complete same-scope last-good choices as usable but stale
+through independent `jira_options.health` and `jira_options.ready`, not Jira ticket health. No verified
+complete initial cache means creation fails closed; assignments are never optimistic.
+Principal/service/incompatible configuration scope changes quarantine both domains. See
 [choice freshness](jira.md#refresh-time-choices-and-freshness).
 
 This is a breaking strict schema: configured forge `account`, Jira `account_id`/

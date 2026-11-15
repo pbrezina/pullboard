@@ -13,9 +13,18 @@ and explicit PR linking. The separate description/comment mention search spans a
 accessible projects without expanding those permissions or the project inventory;
 see [provider queries and limits](providers.md#jira).
 
-During normal refresh the backend reads visible fields, selected projects, fully
-paginated create types and per-type create metadata, project/type status inventories,
-configured-board configuration and project permissions.
+Refresh verifies identity once and fetches ticket/display prerequisites first.
+Independent assigned/mention searches and configured-board sprint reads use bounded
+concurrency, then the complete deduplicated inventory is hydrated. Complete Jira
+tickets, board/current sprints and the first YAML project's real key/name publish
+early, without waiting for creation choices or substituting a later project. Its
+issue-type list may remain empty until options metadata commits; project visibility
+is not creation readiness.
+
+Creation discovery follows Jira ticket work, reusing visible fields from ticket
+preparation and reading selected projects, fully paginated create types and per-type
+create metadata, project/type status inventories, configured-board configuration
+and project permissions.
 Project names and supported issue types come from those reads. It identifies Sprint
 by the `gh-sprint` schema and numeric Story Points by the board's estimation field,
 not by guessed field IDs. Missing permissions, incomplete pages and ambiguous field
@@ -76,8 +85,9 @@ deduplicated by accountId, restricted to active human accounts and then checked
 individually for project assignability with
 `GET /rest/api/3/user/assignable/search?project=...&accountId=...`.
 Configured groups do **not** use broad capped assignable-search range pagination or
-an all-user directory scan. Each deduplicated candidate is checked once per project
-while preparing the refresh's choice snapshot, not on every editor request.
+an all-user directory scan. Repeated group names and overlapping accounts are
+deduplicated; each candidate is checked once per project during the refresh's final
+eligibility batch, not on every editor request.
 
 With absent or empty groups, the backend fully paginates plural
 `GET /rest/api/3/users/search`, then applies the same individual checks. It advances
@@ -107,29 +117,55 @@ drafts and create do not repeat those group/user checks. Rate limits and page/re
 bounds are real operational limits. A small observed group does not prove pagination
 or permissions universally.
 
+Creation metadata/status and group discovery follow Jira ticket work and may overlap
+remaining forge reads. Eligibility is a **standalone lowest-priority batch**, starting
+only after all sources' card fetching has terminated and creation discovery is complete.
+One bounded owned/cancellable queue spans project/account pairs; it does not finish
+one project before starting the next. All stages share the existing per-origin HTTP
+cap (default 4, configurable in YAML), item bounds, pagination, response/time limits
+and backoff. Nested work does not multiply the cap. No hybrid/bulk API work or raised
+cap is part of this change, and no measured speedup is claimed.
+
+The options progress panel keeps group membership indeterminate until full pagination
+and deduplication complete, then shows unique member totals. Per-project eligibility
+counts finished checks, **both eligible and ineligible**, not people retained. Totals
+are unknown until the complete candidate inventory is known. A project finishing its
+checks does not expose a partial pool or make the full options generation ready. See
+[options progress](security-cache.md#ticket-first-scheduling-and-options-progress).
+
 ## Refresh-time choices and freshness
 
 Normal Jira refresh fully discovers every configured project's permitted assignees,
 all allowed types' metadata/capabilities/team choices and statuses, and all board
-active/future sprints. Choices, effective group/default policy, identities and Jira
-cards publish atomically in the ephemeral SQLite snapshot. Opening/searching a dialog,
+active/future sprints. Choices, their **own sprint snapshot** and effective group/default
+policy publish as one complete atomic options generation in ephemeral SQLite,
+independently of Jira cards. Validation never merges newer board sprints or policy
+with an old pool. Opening/searching a dialog,
 drafting and create validation consume that cache, never start metadata/group/user
 discovery. AI generation and explicit live write/follow-up requests retain their
 separate purposes.
 
 Failed required reads/pages retain the **complete same-scope last-good generation**
-and mark Jira stale/error/backoff; no partial, mixed-generation or unrestricted pool
-is published. An active refresh leaves previous choices usable until commit. Before
-the first usable cache, ticket options/drafts/create fail explicitly with readiness
-or discovery errors, not successful empty results. A genuinely fully discovered empty
+and mark **options**, not Jira tickets, stale/error/backoff; no partial, mixed-generation
+or unrestricted pool is published. An active refresh leaves previous complete choices
+usable until commit; expected assignability is never accepted optimistically. Before
+the first verified complete committed cache, creation stays blocked and
+options/drafts/create fail explicitly with readiness or discovery errors, not
+successful empty results. A genuinely fully discovered empty
 pool is different. Principal/service/config scope changes cannot expose another
 account's private choices; compatible restored snapshots remain quarantined until
 identity verification.
 
-Jira source health covers choices too: `last_success_at` is their last successful
-publication. The editor shows a quiet stale-choices note and **Refresh Jira choices**;
-the normal source-health strip carries failure details. Group and policy changes
-apply only with the next successful atomic refresh, never to an old pool alone.
+`SyncStatus.jira_options` supplies independent `ready`, persisted `health` and
+process-local `progress`. A stale complete scoped generation remains ready; absent,
+unverified or quarantined choices do not. Jira source health covers tickets/sprints
+only, so fresh tickets can coexist with failed options, or vice versa when prerequisites
+permit. Each domain retains only its own scoped last-good data; scope changes quarantine
+incompatible cards **and** choices immediately. The editor shows a quiet stale-choices
+note and **Refresh Jira choices**; the creation-options panel carries failure details.
+Group and policy changes apply only with the next successful atomic options publication,
+never to an old pool alone. The job's last-success time requires all ticket sources and
+options to succeed; a domain failure cannot roll back another successful commit.
 An open editor can keep loaded choices; final validation uses the latest committed
 generation and rejects no-longer-permitted values while preserving edits. Jira's
 current upstream permissions still determine whether a live write succeeds.
@@ -157,8 +193,9 @@ When writable Sprint metadata has a supported schema, create uses the discovered
 numeric setter. **If Sprint is absent from create metadata, it is omitted from the
 create body.** Implemented follow-up support independently requires a discovered
 scrum board, visible gh-sprint field and project EDIT_ISSUES + SCHEDULE_ISSUES
-permissions. The selected sprint must appear in the latest committed configured-board
-inventory; submit does not rediscover it.
+permissions. The selected sprint must appear in the latest committed **options
+generation's** configured-board inventory, not a newer card snapshot; submit does not
+rediscover it.
 After explicit submit and confirmed creation it uses Jira Software Cloud's documented
 [Move issues to sprint and rank](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint/#api-rest-agile-1-0-sprint-sprintid-issue-post):
 `POST /rest/agile/1.0/sprint/{sprintId}/issue`, body `{"issues":["REAL-KEY"]}`,

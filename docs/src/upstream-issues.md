@@ -109,8 +109,11 @@ automatically. See [ticket outcomes and capabilities](tickets-ai.md).
 
 Assignee search filters the full cached list locally by name/username/exposed email;
 it makes no request per keystroke. Options/draft/create do not rediscover metadata
-or group membership. Retained stale choices are labeled through Jira source health;
-policy changes apply at the next successful refresh. An explicit status requests at
+or group membership. Retained complete stale choices remain usable and are labeled
+through independent `jira_options.health` and `jira_options.ready`, not Jira ticket health; first-run
+creation waits for a verified complete generation. Policy changes apply at the next
+successful atomic options publication, never to an old pool or newer board sprints.
+An explicit status requests at
 most one direct post-create transition, with no-op at the target and success plus
 warning if unavailable/rejected. Dismissible persistent notices keep the real issue
 link. These are the same [editor rules](tickets-ai.md) as PR tickets.

@@ -3,6 +3,12 @@
   "started_at": null,
   "finished_at": null,
   "last_success_at": null,
+  "board_revision": 0,
+  "jira_options": {
+    "ready": false,
+    "health": {"source_id": "jira", "name": "Work Jira", "kind": "jira", "status": "pending", "last_success_at": null, "last_attempt_at": null, "error": null, "retry_at": null, "coverage_notes": []},
+    "progress": {"phase": "idle", "started_at": null, "finished_at": null, "elapsed_ms": 0, "groups": [], "projects": []}
+  },
   "sources": [
     {"source_id": "jira", "name": "Work Jira", "kind": "jira", "status": "pending", "last_success_at": null, "last_attempt_at": null, "error": null, "retry_at": null, "coverage_notes": []},
     {"source_id": "work-github", "name": "Work GitHub", "kind": "github", "status": "pending", "last_success_at": null, "last_attempt_at": null, "error": null, "retry_at": null, "coverage_notes": []}

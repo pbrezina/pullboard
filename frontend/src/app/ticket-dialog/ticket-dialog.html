@@ -118,7 +118,12 @@
             <button type="button" class="text-button" (click)="loadOptions()">Retry options</button>
           </p>
         }
-        @if (staleChoices()) {
+        @if (!store.jiraOptionsReady()) {
+          <p class="warning-banner" role="status">
+            Jira creation choices are unavailable or still being verified. Your edits are preserved;
+            creation is disabled until a complete options cache is ready.
+          </p>
+        } @else if (staleChoices()) {
           <p class="muted" role="status">
             Using cached Jira choices; the last refresh failed. Your edits are preserved.
             <button

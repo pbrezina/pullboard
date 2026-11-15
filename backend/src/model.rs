@@ -254,8 +254,44 @@ pub struct SyncStatus {
     pub started_at: Option<Time>,
     pub finished_at: Option<Time>,
     pub last_success_at: Option<Time>,
+    pub board_revision: u64,
     pub sources: Vec<SourceHealth>,
     pub progress: Vec<SourceProgress>,
+    pub jira_options: Option<JiraOptionsStatus>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JiraOptionsStatus {
+    pub ready: bool,
+    pub health: SourceHealth,
+    pub progress: JiraOptionsProgress,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JiraOptionsProgress {
+    pub phase: SourcePhase,
+    pub started_at: Option<Time>,
+    pub finished_at: Option<Time>,
+    pub elapsed_ms: u64,
+    pub groups: Vec<ChoiceProgress>,
+    pub projects: Vec<ChoiceProgress>,
+}
+impl JiraOptionsProgress {
+    pub fn new(phase: SourcePhase) -> Self {
+        Self {
+            phase,
+            started_at: None,
+            finished_at: None,
+            elapsed_ms: 0,
+            groups: vec![],
+            projects: vec![],
+        }
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChoiceProgress {
+    pub name: String,
+    pub phase: SourcePhase,
+    pub completed_items: u64,
+    pub total_items: Option<u64>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -300,8 +336,10 @@ impl Default for SyncStatus {
             started_at: None,
             finished_at: None,
             last_success_at: None,
+            board_revision: 0,
             sources: vec![],
             progress: vec![],
+            jira_options: None,
         }
     }
 }

@@ -9,13 +9,16 @@
 | Manual selection unavailable / `404 upstream_issue_not_found` | The process-local store is bounded to 128 entries/8 MiB; eviction, restart or source/account/service/policy changes can invalidate it. Keep/copy edits, explicitly resolve the URL again and review mode/options before a separate submit. No draft is saved or create replayed; see [recovery](upstream-issues.md#testlive-mode-and-recovery). |
 | Upstream issue still shown after cloning | Expected: there is no clone tracking, cloned-status filter or Jira duplicate search. Its open/assigned state determines discovery; repeat live submissions can create duplicates. |
 | Attention count exceeds visible cards | Badges are unfiltered. Inspect independent tab filters and the “X of Y” count. |
-| Old cards after refresh | A failed verified same-scope source keeps last good data and complete Jira choices. Startup quarantines private data until identity verification; incompatible account/service/config scope cannot expose it. Inspect health/backoff/permissions/bounds. |
+| Old cards after refresh | Each failed verified same-scope card source keeps only its own last-good cards (Jira includes board sprints); options have independent retention/health. Other successful sources publish immediately. Startup quarantines both domains until identity verification; incompatible account/service/config scope cannot expose them. Inspect ticket health/backoff/permissions/bounds. |
 | Green source with coverage notes | Expected after a successful refresh. Notes are neutral API/history information, not partial/error source health. Per-item partial attention coverage is independent; green does not prove complete upstream history. |
 | Evaluated count exceeds cards | Counts are unique fully fetched/evaluated candidates, including those excluded afterward, not retained cards, pages or attention threads. |
 | Completed progress panels disappeared | Expected when healthy and idle: expand Source health Details for completed counts/durations. Active refreshes and real failures/backoff still show separate panels above the board. |
 | Total unknown / empty bar | `null` means inventory not yet known, not zero; active work is indeterminate. `0 / 0` means genuinely empty completed work, not a fabricated percentage. |
-| Fetch complete but old board visible | `publishing` waits for the combined atomic snapshot. Do not infer publication from a full item bar; check phase and live sync health. |
-| Fast source has a long elapsed time | Progress `elapsed_ms` includes waiting for other sources and final publication. Compare the `source refresh reads finished` log to isolate the read stage, not just the completed progress duration. |
+| Fetch complete but old cards visible | `publishing` waits for that source's own atomic transaction, not slower sources or options. Do not infer publication from a full item bar; check phase, `board_revision` and live sync health. A source publication failure preserves its old data without undoing another source's commit. |
+| Source completed but refresh still running | Expected: source counters/duration freeze at its own commit; other sources or Jira options may still be active. Compare read-stage, source-commit and job-finished logs, not just total job time. |
+| Fresh Jira tickets but creation unavailable | Tickets/current sprints/real first project publish before options. Creation waits for a verified complete options generation; inspect `jira_options.ready`, health and metadata/group/project progress, not ticket health. |
+| Group progress stays indeterminate | Expected until every membership page and deduplication finish. Partial pages cannot advertise a complete pool; final group counts are unique members. Overlapping groups are deduplicated before project checks. |
+| Project checks exceed eligible assignees | Eligibility counts finished project/account checks, including negative results. Totals become known only after complete candidate discovery; a finished project alone does not make options ready. |
 | Failed/backoff progress with previously green cards | Live `/api/sync` health can fail before the retained board changes. Inspect the error/retry deadline; old snapshot health must not mask the current failure. |
 | Independent accounts back off together | Entries on the same origin deliberately share concurrency and conservative rate-limit state, even with different credentials. GitHub primary core/search/GraphQL buckets are separate; secondary backoff is origin-wide. |
 | GitHub batches smaller than configured | Effective size is `min(github_batch_size, max_concurrent_items)`; only explicit resource/complexity errors split further. Auth, permission, read and rate-limit errors fail rather than falling back. |
@@ -32,10 +35,10 @@
 | No current sprint / multiple current sprints in Overview | Header/current context include only pattern-matching active sprints. Zero/multiple matches require an explicit filter choice and initially leave Jira results empty, not an automatic union/all-sprints fallback. Reset reapplies this rule; deliberate selections survive refreshes. |
 | Wrong/unavailable Current project | It is the first configured Jira project's discovered key/name, not a forge draft override, hardcoded IDM or later-project fallback. Check YAML order and Jira discovery health. |
 | Foreign sprint / unknown ownership | Expected when returned by the configured board. No other board is queried and configured team does not prove ownership. |
-| Identity/project list empty after startup | Check pending/error health. Identity comes from /myself or /user, independently of issue discovery. Complete initial Jira metadata is required for ticket actions; no configured account ID is needed. |
-| Jira discovery takes many assignee requests | At normal refresh, groups form a paginated union, then one accountId assignability check per candidate/project. Missing/empty groups fully enumerate plural /users/search first. Verify directory/group/project permissions and bounds; no partial or unrestricted fallback. Opening/searching/submitting the editor does not repeat discovery. |
-| Choices stale / group-policy change not visible | A failed refresh retains the complete last-good generation and its effective policy. Use Refresh Jira choices or normal refresh; new policy applies only on successful atomic publication. Jira health/last-success covers choices too. |
-| Options/draft/create not ready or discovery failed | No complete scoped initial choice snapshot exists. Check Jira health and refresh permissions/pagination; do not treat failure as an empty or unrestricted pool. |
+| Identity/project list empty after startup | Check pending/error health. Identity comes from /myself or /user, independently of issue discovery. The first YAML project's real key/name can arrive early with empty issue types until options commit; a later project is never substituted. Project visibility is not creation readiness; no configured account ID is needed. |
+| Jira discovery takes many assignee requests | Metadata/groups follow Jira ticket work. Complete groups form a deduplicated union (missing/empty groups fully enumerate plural /users/search). Final exact accountId checks use one bounded project/account queue only after all card fetching and creation discovery finish. Verify permissions/bounds; no partial/optimistic fallback, raised cap or hybrid/bulk API. Editor requests do not repeat discovery. |
+| Choices stale / group-policy change not visible | An options failure retains the complete same-scope last-good generation, including its own sprints and effective policy, as usable but stale. Use Refresh Jira choices or normal refresh; new policy applies only on successful atomic options publication. Inspect independent `jira_options.health`/`ready` and options last-success, not ticket health. |
+| Options/draft/create not ready or discovery failed | No verified complete scoped initial options generation exists. Check `jira_options` health/readiness and refresh permissions/pagination; no partial pool or optimistic assignment. A stale complete generation remains usable; an options-only failure never fails fresh tickets. |
 | Reviewer missing / all tickets unassigned | Self is excluded for review; eligible self remains available but unselected for implementation. All editors start Unassigned. People must be active humans, in the configured group union (if any), and project-assignable in the committed cache. Null requires unassigned capability. |
 | Assignee email missing / search finds nobody | Only upstream-exposed email is shown/searched; it is never inferred. Search name/username too. Filtering is local to the full cached eligible pool, and typing does not change the selected person. Unassigned remains keyboard-accessible. |
 | Status missing or ambiguous | Choices are discovered for the selected project/type, not free text or Jira-wide statuses. Duplicate-name choices cannot be selected; choose a unique name or Jira default/no transition. A listed status does not guarantee a direct transition. |
@@ -70,6 +73,16 @@ switch. Diagnostics omit raw upstream URLs, query/payload contents and credentia
   from the progress panel's longer completion duration. It is not pure network
   time: request-budget waits and item evaluation are included. A failed read's
   count is only fully evaluated items, not a successful partial snapshot.
+- `source snapshot committed` reports that source's transaction/revision and frozen
+  attempt duration. `first source card snapshot committed` reports job-relative time
+  to the first complete successful source publication, even if the source is empty.
+- `Jira creation discovery finished` and `Jira eligibility batch finished` report
+  separate stage durations on success. `Jira options domain committed` includes
+  independent options-attempt `elapsed_ms`, `job_elapsed_ms`, `ready`, `succeeded`
+  and revision. A retained stale generation can be ready when the attempt failed;
+  the log is not proof of fresh successful options unless `succeeded` is true.
+- `refresh job finished` reports total job duration after source/options work ends,
+  not a promise of all-domain success. Check health and job `last_success_at`.
 - `upstream request budget idle` means that an origin budget has no active reads
   at that instant, not that the refresh job finished. `bucket` is a static label
   (`general`, `github_core`, `github_search` or `github_graphql`) identifying the
@@ -79,10 +92,13 @@ switch. Diagnostics omit raw upstream URLs, query/payload contents and credentia
   counters do not reset at each idle message or refresh. Raw origin URLs are not
   logged, so the label alone does not identify a particular host.
 
-Up to four sources can read concurrently, but the old board remains visible until
-all source outcomes reach the one atomic publication. Read-stage timing and final
-progress `elapsed_ms` therefore answer different questions. Observed performance
-depends on the workload and provider; bounded concurrency does not
+Up to four sources can read concurrently and publish complete snapshots independently;
+Jira options publish separately. Compare time to first cards, options-ready time and
+total job duration, rather than treating them as the same event. Completed ticket
+timing never includes later eligibility; options attempt timing includes any barrier
+wait. Job success requires every configured ticket source and enabled options to
+succeed, not merely one fresh source. Observed performance depends on the workload
+and provider; this scheduling change has no measured speedup claim, and bounded concurrency does not
 guarantee no upstream throttling. Honor health/backoff and adjust only the
 [single-YAML limits](configuration.md#controls), not credentials or hidden
 environment overrides to bypass quotas.

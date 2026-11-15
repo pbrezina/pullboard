@@ -1,4 +1,4 @@
-# PullBoard REST contract — v1.4.0 (cached Jira choices and explicit defaults)
+# PullBoard REST contract — v1.5.0 (ticket-first independent publications)
 
 The normative machine-readable schemas are in [openapi.json](openapi.json).
 All paths are same-origin under `/api`, JSON uses `snake_case`, IDs are opaque strings
@@ -6,10 +6,11 @@ All paths are same-origin under `/api`, JSON uses `snake_case`, IDs are opaque s
 explicitly as `null`. Arrays are always present (possibly empty). Unknown request
 fields are rejected. Error responses use `ErrorResponse` even for routing, extraction,
 validation and upstream errors. No endpoint returns secrets or raw upstream errors.
-This extends v1.3.0 with a nullable current project, cached per-type status choices
-and assignee emails, and revises dashboard/editor defaults. Existing create request
-fields, including name-based `status`, are unchanged. Source-health/progress and
-runtime-mode rules remain mandatory. Unknown query keys
+This extends v1.4.0 with independent per-source card publications, a shared committed
+`SyncStatus.board_revision`, and separate nullable `SyncStatus.jira_options` readiness,
+health and progress. Jira options remain a complete atomic generation, no longer
+coupled to card publication. Existing create request fields, including name-based
+`status`, are unchanged. Runtime-mode rules remain mandatory. Unknown query keys
 are also rejected. A nullable property is still required unless explicitly documented
 otherwise.
 
@@ -57,17 +58,44 @@ type, team, sprint or assignee; and `422 create_blocked` for known required-fiel
 capability blockers. Missing/invalid required query values are 400. Keep the existing
 `ErrorResponse` envelope, not an alternate metadata error payload. A failed lookup
 must not masquerade as an empty successful pool. A retained complete choice snapshot
-is usable with stale Jira source health; reads/create never retry choice discovery.
+is usable with stale `SyncStatus.jira_options.health`; reads/create never retry choice discovery.
 A known unsupported mechanism or
 unavailable default can instead be a successful options response with diagnostics.
 
 ## Snapshots and source health
 
-`Board` is a single coherent cached snapshot. `revision` increases on publication;
-`generated_at` is null before the first publication. Each source refresh either
-replaces all that source's data, or retains its previous data with error/backoff
-health. Publication of the combined snapshot uses one SQLite transaction. Reads must
-never observe the delete/insert gap, including concurrent refreshes.
+`Board` is one coherent read of the latest committed cache, not one all-sources refresh
+generation. Each source publishes as soon as its complete card fetch succeeds, without
+waiting for another source or Jira creation options. Jira cards/sprints replace together;
+each forge's PRs/upstream issues replace together. A failed source retains only its
+scoped last-good data with error/backoff health. No partial per-item/page publication.
+Jira creation options are a separate complete atomic generation and health domain.
+Failure in one domain must not undo or delay another domain's successful publication.
+
+Every cache snapshot change is one SQLite transaction merged from the latest committed
+state under serialized publication: card replacement, persisted health changes, options
+publication, and scope quarantine/restoration. Reconcile cross-source links against that
+latest state on each publication, without lost updates or mixed source collections.
+Reads never observe a delete/insert gap. `Board.revision` is an unsigned 64-bit counter
+increased on each such commit, including options-only commits even if cards do not
+change. `generated_at` is the latest snapshot commit time, null before any publication.
+Pure attempt/progress updates do not commit or advance the revision; live attempt-start
+health becomes durable with a domain snapshot/health commit. A failed transaction does
+not advance the revision or discard successful earlier transactions in the job.
+
+`SyncStatus.board_revision` (required u64, initially 0 for an empty cache) is the most
+recent committed SQLite board revision, sampled with the coherent live status read.
+It includes quarantine/restoration and options-only commits; it is not a work counter
+or the current job's final revision. Poll it while `state: "syncing"` **and** idle and
+load Board/Context on change, not just job completion or a completed-phase transition.
+Phases and multiple revisions may be missed between polls. Read status before the
+dependent Board/Context reads; a board can be newer than that status but not be treated
+as older merely because its revision differs. Do not mark a revision consumed until
+the dependent reads succeed; retry failed reads and discard late responses that would
+regress an already applied revision. There is no cross-endpoint transaction or stream.
+Preserve filters, deliberate sprint selections, editor edits and captured mode revisions;
+never automatically resubmit. Revisions order this cache's lifetime, not unrelated
+databases/reinitializations or runtime mode revisions.
 
 `SourceHealth.status` is exactly `pending`, `ok`, `error`, or `backoff`. A complete
 successful refresh is **always `ok`**, for Jira and every forge, even with nonempty
@@ -77,26 +105,31 @@ not a warning severity, failed refresh or reason for an amber source indicator.
 source health or silently treat unknown attention history as handled. A failed
 required read/page is an error, not successful limited coverage.
 
-`pending` means no verified successful snapshot yet. `ok` clears `error`/`retry_at`
-to null and updates `last_success_at`. `error`/`backoff` are stale (or unavailable
+Within each health domain, `pending` means no verified successful snapshot yet. `ok`
+clears `error`/`retry_at` to null and updates `last_success_at`. `error`/`backoff` are stale (or unavailable
 without a last-good snapshot), retain that source's last-good data/coverage notes
 and `last_success_at`, and carry a sanitized nonempty `error`. Only `backoff` has
 non-null `retry_at`. `last_attempt_at` is the start of the latest actual attempt;
 skipping a source during backoff does not advance it. Expired backoff remains
 flagged until the next attempt, rather than silently becoming successful.
 
-`Board.sources` describes its published snapshot. `SyncStatus.sources` is current
+`Board.sources` describes ticket/card health only (Jira includes board sprints), never
+creation options. `SyncStatus.sources` is current
 process health: normally the same, but advances actual attempt start timestamps and
 can report a failure/backoff before publication or a failed cache publication.
 An infrastructure failure before an attempt starts can have null `last_attempt_at`.
 Success becomes `ok` only after commit.
 Use sync health/progress for the live status strip; a `failed`/`backoff` phase must
 not be rendered green just because the still-visible Board has old `ok` health.
-Progress updates never change cards, identities or cache revision. The existing
-principal quarantine rules override retention when identity verification changes.
+Progress updates never change cards, identities or cache revision. Jira options health
+has its own persisted health and attempt/success/retry timestamps, exposed only through
+`SyncStatus.jira_options.health`, not an extra configured source. An options-only failure
+must not fail Jira ticket health or un-complete its progress. The existing principal
+quarantine rules override retention in both domains when identity/scope changes.
 
 `SyncStatus.state` is `idle` or `syncing`. POST sync coalesces with an existing job;
-workers never overlap. Default interval is 3600 seconds. A successful live Jira
+workers never overlap. Options discovery/eligibility is owned by the same cancellable
+job, not a detached worker. Default interval is 3600 seconds. A successful live Jira
 write schedules a refresh (including a follow-up if a refresh is already running);
 simulated writes do not mutate the cache or schedule a write-triggered refresh.
 
@@ -120,18 +153,20 @@ active/completed attempt from SQLite or persisted as user preferences.
 |---|---|
 | `idle` | Startup before any job. Zero completed/elapsed, null total/start/finish. |
 | `queued` | Accepted job, source waiting to start. Same zero/null reset as idle. |
-| `preparing` | Source attempt starts: identity verification, account-scoped metadata/policy preparation. Start set, finish null. |
+| `preparing` | Card attempt starts: identity verification once and ticket/display prerequisites, not creation-choice discovery. Start set, finish null. |
 | `discovering` | Enumerating/paginating and deduplicating issue/PR candidates. Total remains null until the full candidate inventory is known. |
 | `fetching` | Fetching all required candidate details/history/links and evaluating items. Start set, finish null. |
-| `publishing` | Source fetch succeeded, waiting for the combined atomic transaction. Total is known and equals completed; not completed/green yet. |
+| `publishing` | Source fetch succeeded, waiting for its own atomic source transaction. Total is known and equals completed; not completed/green yet. |
 | `completed` | Successful atomic publication. Total equals completed; start/finish set; elapsed frozen. |
 | `failed` | Actual source or publication failure. Finish set; retain only this attempt's honest counters and freeze elapsed. No partial source replacement. |
 | `backoff` | Rate-limited attempt or skipped retry delay. Retry deadline is in source health, not a work total. |
 
-`preparing`, `discovering`, `fetching`, `publishing` are active phases. Adapters
-may interleave discovery and fetching, or skip an inapplicable/instant phase; they
-must report actual work, not timer-driven invented stages. A completed source can
-coexist with `state: "syncing"` briefly while the worker finalizes the job.
+`preparing`, `discovering`, `fetching`, `publishing` are active phases. Forge adapters
+may interleave discovery and fetching; Jira deduplicates both complete searches before
+hydration. Adapters may skip an inapplicable/instant phase, but must report actual work,
+not timer-driven invented stages. A completed source freezes
+its counters, finished timestamp and elapsed time at its own commit and can coexist
+with `state: "syncing"` for the entire remaining source/options work.
 
 Counters count **unique fully fetched/evaluated Jira issues, PRs or upstream issues**, not HTTP
 requests, pages, identities, repositories, comments, sprints, metadata, retained
@@ -161,14 +196,18 @@ anything. A new attempt starts at preparing with fresh counters/timing. An in-at
 rate limit becomes backoff with its actual counters/start/finish/duration. Any
 failure, including preparation failure, must exit active phases; a failure before
 the source could start has null start, finish set and zero elapsed/counters. A cache
-publication failure marks every source still awaiting publication failed, preserves
-the old board/revision and does not advance successful timestamps. No fake success
+publication failure marks only the affected uncommitted domain failed, preserves
+its old data and does not advance its successful timestamps or the revision. Already
+committed sources remain completed/visible. No fake success
 on error, retained-data counts or previous-run duration. Terminal states remain
 until a new job; retry deadline expiry alone does not start progress.
 
 Job `finished_at` is set when all work/publication ends; job `last_success_at` changes
-only if every configured source refreshed and publication succeeded (not if any
-source failed or was skipped in backoff). With zero configured sources the job is a
+only if every configured ticket source **and Jira options when enabled** refreshed
+and committed successfully (not if any required domain failed or was skipped in backoff).
+Options may succeed despite a ticket source failure if their own prerequisites are
+verified and complete; conversely fresh cards remain visible when options fail.
+With zero configured sources Jira options is null and the job is a
 successful no-op, progress/sources are empty, and the board need not be republished.
 
 Mock examples (not upstream coverage claims) are linked from OpenAPI's sync response:
@@ -180,6 +219,99 @@ examples also cover every progress phase, unknown/known totals, in-attempt backo
 test/live/toggled-back/restarted mode revisions, guarded requests and simulations.
 For example, 25 fully evaluated Jira candidates can yield only 9 retained cards;
 this is not a partial refresh, and neither number is an attention count.
+
+### Jira creation-options status and scheduling (normative)
+
+`SyncStatus.jira_options` is required and null **iff Jira is not configured**. Otherwise:
+
+- `JiraOptionsStatus` is exactly `{ready, health, progress}`. `ready` is boolean: only a
+  complete committed cache in the current verified account/service/configuration scope
+  is ready, including a retained stale complete generation. Pending/unverified,
+  quarantined or absent caches are not ready. Ready does not imply every form can
+  create: required values/capability blockers still apply. `health` is `SourceHealth`
+  with `source_id: "jira"`, `kind: "jira"`, independent persisted timestamps/notes.
+  `ok` requires ready; ready iff this scoped domain has a non-null `last_success_at`.
+  Failure without a cache has ready false; failure retaining complete choices has
+  ready true. Refresh in progress does not clear ready or pretend old choices are fresh.
+- `JiraOptionsProgress` is exactly `{phase, started_at, finished_at, elapsed_ms,
+  groups, projects}`; `phase` reuses `SourcePhase`, times are nullable RFC 3339,
+  elapsed is an unsigned integer. Arrays contain `ChoiceProgress`, exactly
+  `{name, phase, completed_items, total_items}`: nonblank semantic group name or real
+  configured project key, `SourcePhase`, unsigned completed and nullable unsigned total.
+  No raw user IDs, emails, secrets or invented work rows. Groups are deduplicated in
+  configured order; projects preserve YAML order, one row per configured project.
+  At idle/reset both arrays are empty; populate known rows as discovery starts, never
+  use rows as fake configured sources. No overall options percentage is defined.
+- `preparing`/`discovering` cover creation metadata/capabilities/statuses/policy and
+  complete group membership pagination; `fetching` means the final eligibility batch;
+  `publishing` means waiting for/performing the independent options transaction;
+  `completed` means that full generation committed. No metadata/groups/eligibility
+  counters are added to ticket `SourceProgress`. Metadata may be indeterminate without
+  invented metadata totals; phase and actual duration are sufficient.
+- Group rows stay indeterminate (`completed_items: 0`, `total_items: null`) while
+  pagination/dedup is incomplete. Only full verified membership discovery reports
+  `completed` with equal known counts of unique discovered members, including 0/0.
+  Partial pages must not look complete. Missing/empty configured groups means no group
+  rows, not an invented all-users group. Discover the complete candidate population
+  through the existing bounded read-only mechanism in that case.
+- Project rows count **finished project/account eligibility checks**, both eligible
+  and ineligible, never tickets, assignees retained, pages or requests. Deduplicate
+  overlapping groups/accounts before building the project/account workload. Before
+  the complete candidate inventory is known, total is null and completed is zero;
+  then report the actual known total for each project (0/0 is valid). A partly failed
+  check never increments completed. Known total is >= completed. Completed rows have
+  equal totals. A queued project may already have a known workload while waiting for
+  the bounded eligibility queue; queued rows always have zero completed checks.
+  Rows can complete before the whole generation commits but do not
+  confer readiness. No optimistic expected assignability or unverified pool exposure.
+
+Verify identity once per source attempt; run bounded independent assigned/mention
+searches and sprint reads, deduplicate the full inventory, and hydrate concurrently.
+Publish complete Jira cards, Board.sprints and Context.current_sprints without waiting
+for creation discovery. Each forge likewise publishes as ready without waiting for Jira.
+After Jira ticket work, bounded creation metadata/status/group discovery may overlap
+remaining forge card fetching. The lowest-priority eligibility batch starts only
+**after all sources' card fetching has terminated and creation metadata/groups are
+complete**; do not interleave eligibility with those reads. Use one bounded owned queue
+across project/account pairs, not sequential project batches. A failed/backoff ticket
+source is terminal for this scheduling barrier; it does not automatically fail options.
+If Jira identity or an options prerequisite is unavailable, fail/skip options honestly,
+retaining only compatible last-good choices. An upstream Jira retry deadline is still
+honored across both domains: separate health is not permission to bypass transport backoff.
+
+All independent/nested work shares the existing bounded per-origin HTTP transport,
+timeouts, response-size limits, complete pagination and backoff. Request/item concurrency
+defaults are 4; actual YAML may differ and is not assumed inspected. Never multiply
+nested caps or silently increase them. Optional hybrid eligibility/bulk APIs are out
+of scope; exact verified eligibility and complete discovery requirements are unchanged.
+
+Options timing is process-local monotonic attempt duration from preparation through
+commit/failure, including any in-attempt barrier wait, excluding queue/skipped-backoff
+time. It samples while active and freezes terminally. Persist health, not active progress;
+restart uses idle/zero/null/empty progress even if verified choices are restored later.
+Every new accepted job resets options to queued (or skipped backoff) with null times,
+zero elapsed and empty rows, along with all ticket progress. Coalescing resets nothing.
+Actual options attempt sets started_at and its own health.last_attempt_at together.
+Active phases have null finish; completed/failed/in-attempt backoff have finish set.
+Failure before an attempt starts has null start, finish set, zero elapsed and empty rows.
+Skipped backoff has null start/finish, zero elapsed and empty rows, retaining the actual
+previous health attempt/retry deadline. Retry expiry alone does not restart work.
+On failure/backoff, retain honest counters, leave finished rows completed and mark
+unfinished rows failed/backoff; no rows remain queued/active after the options attempt
+terminates. Publishing/completed options require every group/project row completed.
+Job remains syncing until options terminates; job last_success_at advances only on
+all-domain success. Cancellation/shutdown must own and stop outstanding work, never
+publish a partial generation or leak a detached eligibility batch; any reported
+cancelled attempt is terminal failed with a safe error, not stuck active or successful.
+
+Redacted diagnostics may report actual per-stage timing, time to first card publication,
+options-ready time and total duration, without private payloads or credentials. Mock
+progress examples are not measured performance promises or tenant/API coverage claims.
+
+Illustrative mocks: [cards visible during eligibility](examples/sync-options-active.json),
+[fresh tickets with stale ready options](examples/sync-options-failed.json),
+[failed initial options discovery](examples/sync-options-unavailable.json), and
+[indeterminate group membership](examples/sync-options-discovering.json).
 
 Run `python api/validate_contract.py` with `jsonschema` and `openapi-spec-validator`
 installed for offline schema/reference/example/negative-case validation. It checks
@@ -193,13 +325,20 @@ return `username: ""`, not an invented login. Before verification the source has
 identity or private snapshot exposed, and health is pending/error as appropriate.
 Identity bootstrap does not require the full issue refresh to succeed. Projects in
 `Context.jira_projects` are discovered selected projects with real names and allowed
-create issue-type names; they contain no defaults. Before discovery the array is empty;
+create issue-type names; they contain no defaults. A minimal verified project lookup
+may publish real key/name early with `issue_types: []` until complete options metadata
+commits; this is not a claim that the project has no types or creation is ready.
+Options readiness comes only from `jira_options`, not Context project visibility.
+Before project discovery the array is empty;
 `Board.sources`/`SyncStatus.sources` distinguish pending/failure from no configured Jira.
 Preserve configured YAML project order, not alphabetical/discovery completion order.
 `Context.current_project` is the discovered `Project` for the **first configured Jira
 project**, or explicit null with Jira disabled, pending or unavailable discovery. Never
 substitute a later discovered project, hardcode IDM, or infer it from issue contents.
-Same-scope last-good discovery may remain visible on failure with stale source health.
+Same-scope last-good project/sprint display discovery may remain visible on ticket
+failure with stale ticket health; create-type inventory belongs to the options generation
+and its independent freshness. Early real first-project lookup is permitted without
+waiting for creation metadata; never synthesize a name or copy a later project.
 The header uses this project and its real key/name; source draft `default_project`
 overrides do not change the header's project.
 The [current-context fixture](examples/context-current.json) illustrates discovery
@@ -212,9 +351,12 @@ user's snapshot, identity or metadata, even if the next read fails. Same-account
 refresh failures preserve only that account's last-good data, marked stale in source
 health. Choice snapshots are complete and scoped to the verified account, service,
 configured projects and committed group/metadata policy. Principal/service scope
-changes quarantine incompatible snapshots immediately. Policy changes take effect
-only with the next successful atomic refresh; never combine an old pool with a newly
-evaluated group policy. Final upstream writes, not cached feasibility/status inventory,
+changes quarantine incompatible card **and** options snapshots immediately, including
+in-flight results before publication. Relevant configuration scope changes likewise
+quarantine incompatible domains; policy-only refresh changes may retain a compatible
+complete generation until replacement. Effective group/policy changes take effect
+only with the next successful atomic **options** publication; never combine an old pool
+with a newly evaluated group policy. Final upstream writes, not cached feasibility/status inventory,
 determine current Jira write permission. See choice-cache rules below.
 
 ## Attention and display semantics
@@ -524,7 +666,8 @@ is deliberately absent from the board fixture and remains valid through draft/cr
    options from cache. Load the complete assignee list with omitted/empty `query`
    before enabling the dialog's selector, then filter locally by name/username/email
    for instant search; never search upstream arbitrary users. Email is shown/searched
-   only when Jira exposes it. A stale retained cache is labeled via Jira source health.
+   only when Jira exposes it. A stale retained cache is labeled via `jira_options.health`,
+   independently of Jira ticket health; readiness gates opening/creation, not card visibility.
 3. Only final POST `/jira/issues` may create an issue. Normally the response returns
    its real confirmed key/URL/title and warnings. Associate the selected PR by Jira
    weblink. If a follow-up sprint assignment/link/transition fails after creation,
@@ -616,10 +759,11 @@ safeguards, never replay an unconfirmed live create after disconnect/restart.
 
 #### Refresh-time choice cache and freshness
 
-Normal Jira refresh fully loads all configured projects' create metadata, every
+The normal refresh job loads all configured projects' create metadata, every
 allowed issue type's capabilities/team choices, complete eligible assignee pools,
 all configured-board active/future sprints and per-type workflow statuses **before**
-publishing success. GET options and both draft/create flows consume this cache;
+publishing **options** success, independently after Jira ticket work. GET options
+and both draft/create flows consume this cache;
 they never enumerate groups, page assignable users, perform per-user eligibility
 checks or rediscover metadata/statuses. Opening/searching a dialog must not start
 discovery. AI draft generation and explicit live create/follow-up calls remain allowed
@@ -631,23 +775,31 @@ upstream type and cache that type's status IDs/names. Do not use issue transitio
 or Jira-wide statuses as the project/type choice inventory. Status inventory is
 **not proof of a permitted transition** for a not-yet-created issue.
 
-Publish choices, their effective project/group policy and Jira source data atomically.
-A failed required read/page fails the Jira refresh, preserves the complete same-scope
-last-good cache and marks Jira `SourceHealth` error/backoff; never publish an empty,
+Publish choices, their effective project/group policy and their own sprint snapshot
+atomically, separately from cards. A failed required options read/page fails only the
+options domain, preserves the complete same-scope last-good cache and marks
+`jira_options.health` error/backoff; never publish an empty,
 unrestricted, partially enumerated or mixed-generation pool. Before the first usable
 cache, options/draft/create fail with the readiness/discovery error above, not an
 apparently successful empty pool. A genuinely fully discovered empty pool is valid.
-Cache policy changes affect validation only after the next successful refresh;
-validation uses one committed snapshot regardless of the last search query. Final
-live create is still subject to Jira's current upstream write/assignment permissions.
+Cache policy changes affect validation only after the next successful options commit;
+validation uses one committed snapshot regardless of the last search query. Never
+mix new Board.sprints/display projects with an older options generation, including
+in a single draft/create validation racing publication. Capture the latest complete
+committed generation once per operation; a later concurrent commit does not splice
+new metadata/pools/policy into it. Final live create is still subject to Jira's current
+upstream write/assignment permissions.
+The same verified sprint read may be staged for ticket and options publication, but
+retained choices always keep their own generation's sprint set until a complete
+replacement commits; new card sprints never mutate old options.
 
-No new freshness fields or endpoints: Jira `SourceHealth` (`source_id: "jira"`) in
-`Board.sources`/live `SyncStatus.sources` covers the choice cache too. `last_success_at`
-is its last successful atomic publication; error/backoff with non-null last success
-means retained stale choices. Pending/failure without a scoped last-good cache means
-unavailable. Prefer live sync health when it reports a failure before board publication.
-An active refresh leaves the previous complete choices usable until commit. Clients
-may keep their already loaded choice list while editing; final create validates
+`SyncStatus.jira_options` supplies independent readiness, persisted health and live
+progress, without a new endpoint or configured source. Its health `last_success_at`
+is the last complete scoped options commit; error/backoff with ready true means
+retained stale choices. Ready false means unavailable even when Jira tickets are fresh.
+Ticket health never claims options freshness, and options-only failure never changes
+ticket success to error. An active refresh leaves previous complete choices usable
+until commit. Clients may keep their already loaded choice list while editing; final create validates
 against the latest committed cache and returns `422 invalid_choice` if no longer
 allowed, preserving edits and never automatically retrying a create.
 

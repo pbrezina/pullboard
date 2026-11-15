@@ -213,7 +213,7 @@ async fn context(State(app): State<Arc<App>>) -> Result<Json<Context>> {
         .jira_choices
         .as_ref()
         .map(|m| m.projects.clone())
-        .unwrap_or_default();
+        .unwrap_or_else(|| snapshot.jira_project.clone().into_iter().collect());
     let current_project = app
         .config
         .jira

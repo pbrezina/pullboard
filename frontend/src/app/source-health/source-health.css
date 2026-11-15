@@ -1,0 +1,27 @@
+.jira-options {
+  margin: 12px 0;
+}
+.jira-options summary {
+  cursor: pointer;
+  min-height: 34px;
+  align-content: center;
+}
+.jira-options summary > span {
+  margin-left: 12px;
+}
+.jira-options summary h2 {
+  display: inline;
+  font-size: inherit;
+  margin: 0;
+}
+.jira-options section {
+  padding-top: 8px;
+}
+.jira-options h3 {
+  font-size: 13px;
+  margin: 12px 0 4px;
+}
+.choice-progress {
+  padding: 4px 0;
+  border-top: 1px solid var(--line);
+}

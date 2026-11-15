@@ -152,10 +152,14 @@ user/group discovery. Configured groups need complete group lookup/membership ac
 plus individual project assignability checks. Absent/empty groups need full paginated
 `/rest/api/3/users/search` access plus the same checks; directory permissions may be
 broader and request cost is pages plus one request per candidate, not one capped
-assignable-search scan. These checks occur during normal refresh; options/drafts/create
-use the committed complete cache without repeating them. Missing permissions/bounds
-fail the refresh closed, retaining complete same-scope last-good data/choices as stale
-when available; see [Jira setup](jira.md).
+assignable-search scan. Metadata/groups follow Jira ticket work, and exact eligibility
+checks run last, after all source card fetching and creation discovery finish, through
+one bounded project/account queue. These checks occur during normal refresh;
+options/drafts/create use the committed complete options generation without repeating
+them. Discovery/eligibility failures fail options closed without failing committed
+Jira tickets; complete same-scope last-good choices stay usable with independent stale
+options health. Without a verified complete initial generation, creation stays blocked.
+Ticket read failures retain only their own scoped last-good cards/sprints; see [Jira setup](jira.md).
 For explicit non-simulated actions, Jira permissions must additionally allow issue
 creation, assignment, remote links and the selected transition; sprint follow-up
 requires discovered scrum/Sprint support and EDIT_ISSUES + SCHEDULE_ISSUES. These reads
@@ -187,8 +191,8 @@ come only from these retained, inspected matching issues, not unrelated colleagu
 tickets.
 
 There is no project-wide scan or broad fallback. Search, page or per-issue read
-failure (including safety bounds) fails the Jira refresh and preserves its last-good
-same-scope snapshot, if any, with stale/error health rather than publishing partial
+failure (including safety bounds) fails Jira ticket refresh and preserves its last-good
+same-scope cards/sprints, if any, with stale/error ticket health rather than publishing partial
 results as success. Indexing, inaccessible projects and deleted history remain
 limitations disclosed in source `coverage_notes`. Current description/comment
 revision timestamps are used when historical mention edits are unavailable; no

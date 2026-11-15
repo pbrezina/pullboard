@@ -279,11 +279,14 @@ impl Forge for Github {
         })
     }
     async fn discover_with_progress(&self, progress: Progress) -> Result<SourceData> {
-        let me: User = self.http.get("user", &[]).await?;
+        self.discover_verified(self.identity().await?, progress)
+            .await
+    }
+    async fn discover_verified(&self, me: Identity, progress: Progress) -> Result<SourceData> {
         progress.discovering();
         let mut found = BTreeMap::new();
         for qualifier in ["author", "review-requested", "mentions"] {
-            let q = format!("is:pr is:open {qualifier}:{}", me.login);
+            let q = format!("is:pr is:open {qualifier}:{}", me.username);
             let mut received = 0_u64;
             for page in 1..=self.http.max_pages() {
                 let response: Search = self
@@ -344,14 +347,14 @@ impl Forge for Github {
         progress.fetching(Some(
             u64::try_from(found.len()).map_err(|_| Error::upstream())?,
         ));
-        let mut data=SourceData {coverage_notes:vec!["GitHub discovery uses author, requested-reviewer and mention search, limited by credential permissions, GitHub indexing and the 1000-result search ceiling. Team-only review requests and inaccessible/deleted history are not guaranteed.".into()],identity:Some(Identity{source_id:self.config.id.clone(),kind:Kind::Github,account_id:me.id.to_string(),display_name:me.person().display_name,username:me.login.clone(),profile_url:me.person().url}),..Default::default()};
+        let mut data=SourceData {coverage_notes:vec!["GitHub discovery uses author, requested-reviewer and mention search, limited by credential permissions, GitHub indexing and the 1000-result search ceiling. Team-only review requests and inaccessible/deleted history are not guaranteed.".into()],identity:Some(me.clone()),..Default::default()};
         // Count active PRs, not just batches: a wide batch must not multiply
         // the configured item-concurrency bound. No detached tasks are spawned.
         let concurrent = self.http.limits().max_concurrent_items;
         let batch_size = self.http.limits().github_batch_size.min(concurrent);
         let keys: Vec<_> = found.into_keys().collect();
         let progress = &progress;
-        let login = &me.login;
+        let login = &me.username;
         let mut batches = stream::iter(keys.chunks(batch_size).map(<[Key]>::to_vec))
             .map(|keys| async move {
                 let pulls = self.batch(&keys).await?;

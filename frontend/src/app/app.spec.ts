@@ -11,8 +11,8 @@ describe('PullBoard app', () => {
     });
     const f = TestBed.createComponent(App);
     const http = TestBed.inject(HttpTestingController);
-    http.expectOne('/api/context').flush(context());
     http.expectOne('/api/sync').flush(sync());
+    http.expectOne('/api/context').flush(context());
     http
       .expectOne('/api/runtime-mode')
       .flush({ read_only_test_mode: true, mode_revision: 'mode-test-1' });

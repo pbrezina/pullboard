@@ -19,6 +19,12 @@ use tokio_util::sync::CancellationToken;
 // Per-origin HTTP request budgets are enforced separately by the transports.
 const MAX_CONCURRENT_SOURCES: usize = 4;
 
+struct StagedChoices {
+    scope: String,
+    discovery: crate::jira::ChoiceDiscovery,
+    reporter: ChoiceReporter,
+}
+
 enum Source<'a> {
     Jira(&'a Jira),
     Forge(&'a dyn Forge),
@@ -36,12 +42,6 @@ impl Source<'_> {
             Self::Forge(forge) => forge.identity().await,
         }
     }
-    async fn discover(&self, progress: Progress) -> Result<SourceData> {
-        match self {
-            Self::Jira(jira) => jira.discover_with_progress(progress).await,
-            Self::Forge(forge) => forge.discover_with_progress(progress).await,
-        }
-    }
 }
 
 struct Live {
@@ -49,6 +49,9 @@ struct Live {
     clocks: Vec<Option<Instant>>,
     write_refresh_pending: bool,
     scopes: Vec<Option<String>>,
+    options_clock: Option<Instant>,
+    job_clock: Option<Instant>,
+    first_card_published: bool,
 }
 impl Live {
     fn sample(&self) -> SyncStatus {
@@ -59,9 +62,61 @@ impl Live {
                 p.elapsed_ms = elapsed(*start, now);
             }
         }
+        if let (Some(options), Some(start)) = (&mut status.jira_options, self.options_clock) {
+            options.progress.elapsed_ms = elapsed(start, now);
+        }
         status
     }
+    fn reconcile(&mut self, committed: crate::cache::Committed) {
+        self.status.board_revision = committed.revision;
+        for index in 0..self.status.sources.len() {
+            let id = self.status.sources[index].source_id.clone();
+            let scope = committed.scopes.get(&id).cloned();
+            let changed = scope != self.scopes[index];
+            if let Some(health) = committed.sources.iter().find(|h| h.source_id == id)
+                && (changed
+                    || health.last_attempt_at > self.status.sources[index].last_attempt_at
+                    || (health.last_attempt_at == self.status.sources[index].last_attempt_at
+                        && health.last_success_at > self.status.sources[index].last_success_at))
+            {
+                let attempt = self.status.sources[index].last_attempt_at;
+                self.status.sources[index] = health.clone();
+                if self.clocks[index].is_some() {
+                    self.status.sources[index].last_attempt_at = attempt;
+                }
+            }
+            if changed && self.status.progress[index].phase == SourcePhase::Completed {
+                fail_health(&mut self.status.sources[index], &Error::unavailable());
+                self.finish_source(index, SourcePhase::Failed);
+            }
+            if id == "jira"
+                && let Some(options) = &mut self.status.jira_options
+            {
+                if let Some(health) = &committed.options
+                    && (changed
+                        || health.last_attempt_at > options.health.last_attempt_at
+                        || (health.last_attempt_at == options.health.last_attempt_at
+                            && health.last_success_at > options.health.last_success_at))
+                {
+                    let attempt = options.health.last_attempt_at;
+                    options.health = health.clone();
+                    if self.options_clock.is_some() {
+                        options.health.last_attempt_at = attempt;
+                    }
+                }
+                options.ready = committed.options_ready;
+                if changed && options.progress.phase == SourcePhase::Completed {
+                    fail_health(&mut options.health, &Error::unavailable());
+                    options.progress.phase = SourcePhase::Failed;
+                    options.progress.finished_at = Some(Utc::now());
+                }
+            }
+            self.scopes[index] = scope;
+        }
+    }
     fn enqueue(&mut self) {
+        self.job_clock = Some(Instant::now());
+        self.first_card_published = false;
         self.status.state = "syncing".into();
         self.status.started_at = Some(Utc::now());
         self.status.finished_at = None;
@@ -81,6 +136,16 @@ impl Live {
             })
             .collect();
         self.clocks.fill(None);
+        self.options_clock = None;
+        if let Some(options) = &mut self.status.jira_options {
+            options.progress = JiraOptionsProgress::new(
+                if options.health.retry_at.is_some_and(|at| at > Utc::now()) {
+                    SourcePhase::Backoff
+                } else {
+                    SourcePhase::Queued
+                },
+            );
+        }
     }
     fn finish_source(&mut self, index: usize, phase: SourcePhase) {
         let p = &mut self.status.progress[index];
@@ -88,6 +153,26 @@ impl Live {
         p.finished_at = Some(Utc::now());
         if let Some(start) = self.clocks[index].take() {
             p.elapsed_ms = elapsed(start, Instant::now());
+        }
+    }
+    fn finish_options(&mut self, phase: SourcePhase) {
+        let Some(options) = &mut self.status.jira_options else {
+            return;
+        };
+        options.progress.phase = phase;
+        options.progress.finished_at = Some(Utc::now());
+        if let Some(start) = self.options_clock.take() {
+            options.progress.elapsed_ms = elapsed(start, Instant::now());
+        }
+        for row in options
+            .progress
+            .groups
+            .iter_mut()
+            .chain(&mut options.progress.projects)
+        {
+            if row.phase != SourcePhase::Completed {
+                row.phase = phase;
+            }
         }
     }
 }
@@ -127,6 +212,9 @@ impl Progress {
                     clocks: vec![Some(Instant::now())],
                     write_refresh_pending: false,
                     scopes: vec![None],
+                    options_clock: None,
+                    job_clock: None,
+                    first_card_published: false,
                 })),
                 0,
             )),
@@ -165,6 +253,78 @@ impl Progress {
     }
 }
 
+/// Process-local creation-choice instrumentation. No account IDs enter status.
+#[derive(Clone, Default)]
+pub(crate) struct ChoiceReporter {
+    live: Option<Arc<Mutex<Live>>>,
+}
+impl ChoiceReporter {
+    fn update(&self, f: impl FnOnce(&mut JiraOptionsProgress)) {
+        if let Some(live) = &self.live
+            && let Some(options) = &mut live.lock().expect("sync lock poisoned").status.jira_options
+        {
+            f(&mut options.progress);
+        }
+    }
+    pub(crate) fn discovery(&self, groups: &[String], projects: &[String]) {
+        self.update(|p| {
+            p.phase = SourcePhase::Discovering;
+            let row = |name: &String| ChoiceProgress {
+                name: name.clone(),
+                phase: SourcePhase::Queued,
+                completed_items: 0,
+                total_items: None,
+            };
+            p.groups = groups.iter().map(row).collect();
+            p.projects = projects.iter().map(row).collect();
+        });
+    }
+    pub(crate) fn group_started(&self, name: &str) {
+        self.update(|p| {
+            if let Some(row) = p.groups.iter_mut().find(|r| r.name == name) {
+                row.phase = SourcePhase::Discovering;
+            }
+        });
+    }
+    pub(crate) fn group_completed(&self, name: &str, total: u64) {
+        self.update(|p| {
+            if let Some(row) = p.groups.iter_mut().find(|r| r.name == name) {
+                row.phase = SourcePhase::Completed;
+                row.total_items = Some(total);
+                row.completed_items = total;
+            }
+        });
+    }
+    pub(crate) fn eligibility(&self, total: u64) {
+        self.update(|p| {
+            p.phase = SourcePhase::Fetching;
+            for row in &mut p.projects {
+                row.total_items = Some(total);
+                if total == 0 {
+                    row.phase = SourcePhase::Completed;
+                }
+            }
+        });
+    }
+    pub(crate) fn project_started(&self, key: &str) {
+        self.update(|p| {
+            if let Some(row) = p.projects.iter_mut().find(|r| r.name == key) {
+                row.phase = SourcePhase::Fetching;
+            }
+        });
+    }
+    pub(crate) fn project_checked(&self, key: &str) {
+        self.update(|p| {
+            if let Some(row) = p.projects.iter_mut().find(|r| r.name == key) {
+                row.completed_items = row.completed_items.saturating_add(1);
+                if row.total_items == Some(row.completed_items) {
+                    row.phase = SourcePhase::Completed;
+                }
+            }
+        });
+    }
+}
+
 pub struct Syncer {
     cache: Arc<Cache>,
     forges: Vec<Arc<dyn Forge>>,
@@ -190,12 +350,20 @@ impl Syncer {
             .collect();
         let clocks = vec![None; sources.len()];
         let scopes = vec![None; sources.len()];
+        let jira_options = cache
+            .configured_options_health()
+            .map(|health| JiraOptionsStatus {
+                ready: false,
+                health,
+                progress: JiraOptionsProgress::new(SourcePhase::Idle),
+            });
         Arc::new(Self {
             cache,
             forges,
             jira,
             live: Arc::new(Mutex::new(Live {
                 status: SyncStatus {
+                    jira_options,
                     sources,
                     progress,
                     ..Default::default()
@@ -203,16 +371,22 @@ impl Syncer {
                 clocks,
                 write_refresh_pending: false,
                 scopes,
+                options_clock: None,
+                job_clock: None,
+                first_card_published: false,
             })),
             notify: Notify::new(),
             interval,
         })
     }
     pub async fn status(&self) -> Result<SyncStatus> {
-        Ok(self.live.lock().expect("sync lock poisoned").sample())
+        let mut live = self.live.lock().expect("sync lock poisoned");
+        live.reconcile(self.cache.committed());
+        Ok(live.sample())
     }
     pub async fn request(&self) -> Result<SyncStatus> {
         let mut live = self.live.lock().expect("sync lock poisoned");
+        live.reconcile(self.cache.committed());
         if live.status.state != "syncing" {
             live.enqueue();
             self.notify.notify_one();
@@ -223,6 +397,7 @@ impl Syncer {
     /// if it raced with an already running read. Simulations never call this.
     pub async fn after_write(&self) -> Result<SyncStatus> {
         let mut live = self.live.lock().expect("sync lock poisoned");
+        live.reconcile(self.cache.committed());
         if live.status.state == "syncing" {
             live.write_refresh_pending = true;
         } else {
@@ -242,10 +417,10 @@ impl Syncer {
             interval.tick().await;
             loop {
                 tokio::select! {
-                    _=cancel.cancelled()=>break,
+                    _=cancel.cancelled()=>{ this.cancelled().await; break; },
                     _=interval.tick()=>{if let Err(error)=this.request().await{tracing::error!(code=error.code,"could not schedule refresh");}},
                     _=this.notify.notified()=>{
-                        tokio::select!{_ = cancel.cancelled()=>break,_ = this.refresh()=>{}}
+                        tokio::select!{_ = cancel.cancelled()=>{ this.cancelled().await; break; },_ = this.refresh()=>{}}
                     }
                 }
             }
@@ -269,7 +444,7 @@ impl Syncer {
             },
         ))
     }
-    async fn verify(&self, index: usize, identity: Identity) -> Result<()> {
+    async fn verify(&self, index: usize, identity: Identity) -> Result<String> {
         let (source_id, kind) = {
             let live = self.live.lock().expect("sync lock poisoned");
             let source = &live.status.sources[index];
@@ -279,25 +454,15 @@ impl Syncer {
             return Err(Error::upstream());
         }
         self.cache.verify(identity).await?;
-        let snapshot = self.cache.read().await?;
-        // Another source may have verified between these awaits. Reconcile only
-        // this source's principal scope and health, never a whole shared snapshot.
-        let scope = snapshot.source_accounts.get(&source_id).cloned();
-        let health = snapshot
-            .board
-            .sources
-            .iter()
-            .find(|s| s.source_id == source_id && s.kind == kind)
-            .ok_or_else(Error::internal)?;
+        let committed = self.cache.committed();
+        let scope = committed
+            .scopes
+            .get(&source_id)
+            .cloned()
+            .ok_or_else(Error::unavailable)?;
         let mut live = self.live.lock().expect("sync lock poisoned");
-        // Account quarantine/restoration overrides old live health as well as cards.
-        if live.scopes[index] != scope {
-            let attempt = live.status.sources[index].last_attempt_at;
-            live.status.sources[index] = health.clone();
-            live.status.sources[index].last_attempt_at = attempt;
-            live.scopes[index] = scope;
-        }
-        Ok(())
+        live.reconcile(committed);
+        Ok(scope)
     }
     fn fetched(&self, index: usize, result: &Result<SourceData>) {
         let mut live = self.live.lock().expect("sync lock poisoned");
@@ -330,49 +495,21 @@ impl Syncer {
             "source refresh reads finished"
         );
     }
-    fn finish(&self, published: Result<crate::cache::Snapshot>, success: bool) {
+    fn finish(&self) {
         let mut live = self.live.lock().expect("sync lock poisoned");
-        let committed = published.is_ok();
-        match published {
-            Ok(snapshot) => {
-                live.status.sources = snapshot.board.sources;
-                for index in 0..live.status.progress.len() {
-                    if live.status.progress[index].phase == SourcePhase::Publishing {
-                        let phase = if live.status.sources[index].status == "ok" {
-                            SourcePhase::Completed
-                        } else {
-                            SourcePhase::Failed
-                        };
-                        live.finish_source(index, phase);
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::error!(code = error.code, "snapshot publication failed");
-                for index in 0..live.status.progress.len() {
-                    if matches!(
-                        live.status.progress[index].phase,
-                        SourcePhase::Publishing
-                            | SourcePhase::Queued
-                            | SourcePhase::Preparing
-                            | SourcePhase::Discovering
-                            | SourcePhase::Fetching
-                    ) {
-                        fail_health(&mut live.status.sources[index], &error);
-                        live.finish_source(index, SourcePhase::Failed);
-                    }
-                }
-            }
-        }
+        live.reconcile(self.cache.committed());
         live.status.state = "idle".into();
         live.status.finished_at = Some(Utc::now());
-        if committed
-            && success
+        if live
+            .status
+            .progress
+            .iter()
+            .all(|p| p.phase == SourcePhase::Completed)
             && live
                 .status
-                .progress
-                .iter()
-                .all(|p| p.phase == SourcePhase::Completed)
+                .jira_options
+                .as_ref()
+                .is_none_or(|o| o.progress.phase == SourcePhase::Completed)
         {
             live.status.last_success_at = live.status.finished_at;
         }
@@ -382,44 +519,261 @@ impl Syncer {
             self.notify.notify_one();
         }
     }
-    async fn read_source(&self, source: Source<'_>) -> Option<(usize, SourceUpdate)> {
-        let (index, progress) = self.start(source.id())?;
-        let result = match source.identity().await {
-            Ok(identity) => match self.verify(index, identity).await {
-                Ok(()) => source.discover(progress).await,
-                Err(error) => Err(error),
-            },
+    async fn publish_source(&self, index: usize, scope: Option<&str>, result: Result<SourceData>) {
+        self.fetched(index, &result);
+        let health = self.live.lock().expect("sync lock poisoned").status.sources[index].clone();
+        let published = self
+            .cache
+            .publish_source(
+                SourceUpdate {
+                    source_id: health.source_id.clone(),
+                    result,
+                },
+                health,
+                scope,
+            )
+            .await;
+        let mut live = self.live.lock().expect("sync lock poisoned");
+        match published {
+            Ok(snapshot) => {
+                live.status.sources[index] = snapshot.board.sources[index].clone();
+                if live.status.progress[index].phase == SourcePhase::Publishing {
+                    live.finish_source(index, SourcePhase::Completed);
+                }
+                live.reconcile(self.cache.committed());
+                tracing::info!(source_id = %live.status.sources[index].source_id, board_revision = snapshot.board.revision, elapsed_ms = live.status.progress[index].elapsed_ms, "source snapshot committed");
+                if !live.first_card_published
+                    && live.status.progress[index].phase == SourcePhase::Completed
+                {
+                    live.first_card_published = true;
+                    tracing::info!(
+                        elapsed_ms = live.job_clock.map(|start| elapsed(start, Instant::now())),
+                        "first source card snapshot committed"
+                    );
+                }
+            }
+            Err(error) => {
+                live.reconcile(self.cache.committed());
+                // Preserve a transport backoff if persisting its health failed.
+                if live.status.progress[index].phase != SourcePhase::Backoff {
+                    fail_health(&mut live.status.sources[index], &error);
+                    live.finish_source(index, SourcePhase::Failed);
+                }
+                tracing::error!(source_id = %live.status.sources[index].source_id, code = error.code, "source snapshot publication failed");
+            }
+        }
+    }
+    fn start_options(&self) -> Option<ChoiceReporter> {
+        let mut live = self.live.lock().expect("sync lock poisoned");
+        live.reconcile(self.cache.committed());
+        let options = live.status.jira_options.as_mut()?;
+        if options.progress.phase == SourcePhase::Backoff
+            || options.health.retry_at.is_some_and(|at| at > Utc::now())
+        {
+            options.progress = JiraOptionsProgress::new(SourcePhase::Backoff);
+            return None;
+        }
+        let now = Utc::now();
+        options.health.last_attempt_at = Some(now);
+        options.progress.started_at = Some(now);
+        options.progress.phase = SourcePhase::Preparing;
+        live.options_clock = Some(Instant::now());
+        Some(ChoiceReporter {
+            live: Some(self.live.clone()),
+        })
+    }
+    async fn publish_options(&self, scope: Option<String>, result: Result<crate::jira::Metadata>) {
+        let mut health = {
+            let mut live = self.live.lock().expect("sync lock poisoned");
+            let options = live.status.jira_options.as_mut().expect("Jira configured");
+            if let Err(error) = &result {
+                fail_health(&mut options.health, error);
+            } else {
+                options.progress.phase = SourcePhase::Publishing;
+            }
+            options.health.clone()
+        };
+        let failure = result.as_ref().err().cloned();
+        let published = self
+            .cache
+            .publish_options(scope.as_deref(), result, health.clone())
+            .await;
+        if let Some(error) = published.as_ref().err().or(failure.as_ref())
+            && self.cache.committed().scopes.get("jira") == scope.as_ref()
+            && let Some(jira) = &self.jira
+        {
+            jira.choice_failure(error.clone()).await;
+        }
+        let mut live = self.live.lock().expect("sync lock poisoned");
+        match published {
+            Ok(snapshot) => {
+                let options = live.status.jira_options.as_mut().expect("Jira configured");
+                options.health = snapshot.jira_options_health.expect("Jira configured");
+                options.ready = snapshot.jira_choices.is_some();
+                live.finish_options(failure.as_ref().map_or(SourcePhase::Completed, |e| {
+                    if e.retry_at.is_some() {
+                        SourcePhase::Backoff
+                    } else {
+                        SourcePhase::Failed
+                    }
+                }));
+                live.reconcile(self.cache.committed());
+                tracing::info!(
+                    board_revision = snapshot.board.revision,
+                    elapsed_ms = live
+                        .status
+                        .jira_options
+                        .as_ref()
+                        .map(|o| o.progress.elapsed_ms),
+                    job_elapsed_ms = live.job_clock.map(|start| elapsed(start, Instant::now())),
+                    ready = live.status.jira_options.as_ref().is_some_and(|o| o.ready),
+                    succeeded = failure.is_none(),
+                    "Jira options domain committed"
+                );
+            }
+            Err(error) => {
+                live.reconcile(self.cache.committed());
+                if self.cache.committed().scopes.get("jira") != scope.as_ref() {
+                    health = live
+                        .status
+                        .jira_options
+                        .as_ref()
+                        .expect("Jira configured")
+                        .health
+                        .clone();
+                }
+                if !failure.as_ref().is_some_and(|e| e.retry_at.is_some())
+                    || self.cache.committed().scopes.get("jira") != scope.as_ref()
+                {
+                    fail_health(&mut health, &error);
+                }
+                let phase = if health.retry_at.is_some() {
+                    SourcePhase::Backoff
+                } else {
+                    SourcePhase::Failed
+                };
+                live.status
+                    .jira_options
+                    .as_mut()
+                    .expect("Jira configured")
+                    .health = health;
+                live.finish_options(phase);
+                tracing::error!(code = error.code, "Jira options publication failed");
+            }
+        }
+    }
+    async fn read_source(&self, source: Source<'_>) -> Option<StagedChoices> {
+        let initial_scope = self.cache.committed().scopes.get(source.id()).cloned();
+        let Some((index, progress)) = self.start(source.id()) else {
+            if matches!(source, Source::Jira(_)) && self.start_options().is_some() {
+                self.publish_options(initial_scope, Err(Error::unavailable()))
+                    .await;
+            }
+            return None;
+        };
+        let verified = match source.identity().await {
+            Ok(identity) => self
+                .verify(index, identity.clone())
+                .await
+                .map(|scope| (identity, scope)),
             Err(error) => Err(error),
         };
-        self.fetched(index, &result);
-        Some((
-            index,
-            SourceUpdate {
-                source_id: source.id().into(),
-                result,
-            },
-        ))
+        match source {
+            Source::Forge(forge) => {
+                let (scope, result) = match verified {
+                    Ok((identity, scope)) => {
+                        let mut result = match self.retry_error(index) {
+                            Some(error) => Err(error),
+                            None => forge.discover_verified(identity.clone(), progress).await,
+                        };
+                        if let Ok(data) = &mut result {
+                            data.identity = Some(identity);
+                        }
+                        (Some(scope), result)
+                    }
+                    Err(error) => (initial_scope, Err(error)),
+                };
+                self.publish_source(index, scope.as_deref(), result).await;
+                None
+            }
+            Source::Jira(jira) => {
+                let (identity, scope) = match verified {
+                    Ok(pair) => pair,
+                    Err(error) => {
+                        self.publish_source(index, initial_scope.as_deref(), Err(error.clone()))
+                            .await;
+                        if self.start_options().is_some() {
+                            self.publish_options(initial_scope, Err(error)).await;
+                        }
+                        return None;
+                    }
+                };
+                if let Some(error) = self.retry_error(index) {
+                    self.publish_source(index, Some(&scope), Err(error.clone()))
+                        .await;
+                    if self.start_options().is_some() {
+                        self.publish_options(Some(scope), Err(error)).await;
+                    }
+                    return None;
+                }
+                let preparation = jira.prepare_tickets().await;
+                let result = match &preparation {
+                    Ok(preparation) => {
+                        jira.read_tickets(identity.clone(), preparation, progress)
+                            .await
+                    }
+                    Err(error) => Err(error.clone()),
+                };
+                let sprints = result.as_ref().ok().map(|d| d.sprints.clone());
+                self.publish_source(index, Some(&scope), result).await;
+                let reporter = self.start_options()?;
+                let choices = jira
+                    .discover_choices(
+                        &identity,
+                        preparation.as_ref().ok(),
+                        sprints.as_deref(),
+                        reporter.clone(),
+                    )
+                    .await;
+                match choices {
+                    Ok(discovery) => Some(StagedChoices {
+                        scope,
+                        discovery,
+                        reporter,
+                    }),
+                    Err(error) => {
+                        self.publish_options(Some(scope), Err(error)).await;
+                        None
+                    }
+                }
+            }
+        }
+    }
+    fn retry_error(&self, index: usize) -> Option<Error> {
+        let live = self.live.lock().expect("sync lock poisoned");
+        let source = &live.status.sources[index];
+        let options_retry = if source.source_id == "jira" {
+            live.status
+                .jira_options
+                .as_ref()
+                .and_then(|o| o.health.retry_at)
+        } else {
+            None
+        };
+        source
+            .retry_at
+            .max(options_retry)
+            .filter(|at| *at > Utc::now())
+            .map(Error::backoff)
     }
     async fn refresh(&self) {
-        if self
-            .live
-            .lock()
-            .expect("sync lock poisoned")
-            .status
-            .sources
-            .is_empty()
-        {
-            self.finish(Ok(crate::cache::Snapshot::default()), true);
+        let started = Instant::now();
+        if let Err(error) = self.cache.read().await {
+            self.fail_active(&error);
+            self.finish();
             return;
         }
-        let old = match self.cache.read().await {
-            Ok(s) => s,
-            Err(e) => {
-                self.finish(Err(e), false);
-                return;
-            }
-        };
-        let mut reads = Vec::with_capacity(old.board.sources.len());
+        let mut reads = Vec::new();
         if let Some(jira) = &self.jira {
             reads.push(self.read_source(Source::Jira(jira.as_ref())));
         }
@@ -427,31 +781,68 @@ impl Syncer {
             reads.push(self.read_source(Source::Forge(forge.as_ref())));
         }
         let mut reads = stream::iter(reads).buffer_unordered(MAX_CONCURRENT_SOURCES);
-        let mut outcomes = Vec::with_capacity(old.board.sources.len());
-        // Do not short-circuit on failure: every independent source gets its turn.
+        let mut choices = None;
+        // Publications happen inside each owned future while other sources continue.
         while let Some(outcome) = reads.next().await {
-            if let Some(outcome) = outcome {
-                outcomes.push(outcome);
+            if outcome.is_some() {
+                choices = outcome;
             }
         }
-        outcomes.sort_by_key(|(index, _)| *index);
-        let updates: Vec<_> = outcomes.into_iter().map(|(_, update)| update).collect();
-        let health = self
-            .live
-            .lock()
-            .expect("sync lock poisoned")
-            .status
-            .sources
-            .clone();
-        let success =
-            updates.len() == old.board.sources.len() && updates.iter().all(|u| u.result.is_ok());
-        let published = self.cache.publish_attempts(updates, &health).await;
-        if let Err(error) = &published
-            && let Some(jira) = &self.jira
+        // Lowest priority barrier: every card future and complete discovery above
+        // terminated. The borrowed queue below cannot escape the refresh worker.
+        if let Some(StagedChoices {
+            scope,
+            discovery,
+            reporter,
+        }) = choices
         {
-            jira.choice_failure(error.clone()).await;
+            let result = self
+                .jira
+                .as_ref()
+                .expect("Jira configured")
+                .check_choices(discovery, reporter)
+                .await;
+            self.publish_options(Some(scope), result).await;
         }
-        self.finish(published, success);
+        self.finish();
+        tracing::info!(
+            elapsed_ms = elapsed(started, Instant::now()),
+            "refresh job finished"
+        );
+    }
+    fn fail_active(&self, error: &Error) {
+        let mut live = self.live.lock().expect("sync lock poisoned");
+        for index in 0..live.status.progress.len() {
+            if !matches!(
+                live.status.progress[index].phase,
+                SourcePhase::Completed | SourcePhase::Failed | SourcePhase::Backoff
+            ) {
+                fail_health(&mut live.status.sources[index], error);
+                live.finish_source(index, SourcePhase::Failed);
+            }
+        }
+        if let Some(options) = &mut live.status.jira_options
+            && !matches!(
+                options.progress.phase,
+                SourcePhase::Completed | SourcePhase::Failed | SourcePhase::Backoff
+            )
+        {
+            fail_health(&mut options.health, error);
+            live.finish_options(SourcePhase::Failed);
+        }
+    }
+    async fn cancelled(&self) {
+        self.fail_active(&Error::new(
+            http::StatusCode::SERVICE_UNAVAILABLE,
+            "refresh_cancelled",
+            "Refresh cancelled; complete cached data was retained.",
+        ));
+        let mut live = self.live.lock().expect("sync lock poisoned");
+        if live.status.state == "syncing" {
+            live.status.state = "idle".into();
+            live.status.finished_at = Some(Utc::now());
+        }
+        live.write_refresh_pending = false;
     }
 }
 
@@ -508,5 +899,58 @@ mod tests {
         live.enqueue();
         assert_eq!(live.sample().progress[0].phase, SourcePhase::Queued);
         assert_eq!(live.sample().sources[0].status, "backoff");
+    }
+    #[test]
+    fn options_duration_is_monotonic_and_terminal_rows_freeze_without_reusing_prior_work() {
+        let progress = Progress::recording("jira");
+        let (shared, _) = progress.live.as_ref().unwrap();
+        let mut live = shared.lock().unwrap();
+        live.status.jira_options = Some(JiraOptionsStatus {
+            ready: false,
+            health: SourceHealth {
+                source_id: "jira".into(),
+                name: "Jira creation options".into(),
+                kind: Kind::Jira,
+                status: "pending".into(),
+                last_success_at: None,
+                last_attempt_at: None,
+                error: None,
+                retry_at: None,
+                coverage_notes: vec![],
+            },
+            progress: JiraOptionsProgress {
+                started_at: Some(Utc::now() + chrono::Duration::days(1)),
+                groups: vec![ChoiceProgress {
+                    name: "Verified group".into(),
+                    phase: SourcePhase::Completed,
+                    completed_items: 2,
+                    total_items: Some(2),
+                }],
+                projects: vec![ChoiceProgress {
+                    name: "DEV".into(),
+                    phase: SourcePhase::Fetching,
+                    completed_items: 1,
+                    total_items: Some(2),
+                }],
+                ..JiraOptionsProgress::new(SourcePhase::Fetching)
+            },
+        });
+        live.options_clock = Some(Instant::now() - std::time::Duration::from_millis(20));
+        assert!(live.sample().jira_options.unwrap().progress.elapsed_ms >= 20);
+        live.finish_options(SourcePhase::Failed);
+        let frozen = live.sample().jira_options.unwrap().progress;
+        assert_eq!(frozen.groups[0].phase, SourcePhase::Completed);
+        assert_eq!(frozen.projects[0].phase, SourcePhase::Failed);
+        assert_eq!(frozen.projects[0].completed_items, 1);
+        assert_eq!(
+            live.sample().jira_options.unwrap().progress.elapsed_ms,
+            frozen.elapsed_ms
+        );
+        live.enqueue();
+        let reset = live.sample().jira_options.unwrap().progress;
+        assert_eq!(reset.phase, SourcePhase::Queued);
+        assert_eq!(reset.elapsed_ms, 0);
+        assert!(reset.groups.is_empty() && reset.projects.is_empty());
+        assert!(reset.started_at.is_none() && reset.finished_at.is_none());
     }
 }

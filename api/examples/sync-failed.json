@@ -1,8 +1,14 @@
 {
   "state": "idle",
   "started_at": "2026-11-09T12:00:00Z",
-  "finished_at": "2026-11-09T12:00:14Z",
+  "finished_at": "2026-11-09T12:00:20Z",
   "last_success_at": "2026-11-09T11:00:14Z",
+  "board_revision": 13,
+  "jira_options": {
+    "ready": true,
+    "health": {"source_id": "jira", "name": "Work Jira", "kind": "jira", "status": "ok", "last_success_at": "2026-11-09T12:00:20Z", "last_attempt_at": "2026-11-09T12:00:14Z", "error": null, "retry_at": null, "coverage_notes": []},
+    "progress": {"phase": "completed", "started_at": "2026-11-09T12:00:14Z", "finished_at": "2026-11-09T12:00:20Z", "elapsed_ms": 6000, "groups": [], "projects": [{"name": "IDM", "phase": "completed", "completed_items": 0, "total_items": 0}]}
+  },
   "sources": [
     {"source_id": "jira", "name": "Work Jira", "kind": "jira", "status": "ok", "last_success_at": "2026-11-09T12:00:14Z", "last_attempt_at": "2026-11-09T12:00:00Z", "error": null, "retry_at": null, "coverage_notes": ["Search indexing and deleted history may omit mentions."]},
     {"source_id": "work-github", "name": "Work GitHub", "kind": "github", "status": "error", "last_success_at": "2026-11-09T11:00:14Z", "last_attempt_at": "2026-11-09T12:00:00Z", "error": "Could not finish reading pull request history.", "retry_at": null, "coverage_notes": ["Discovery is limited to accessible search results and retained history."]}

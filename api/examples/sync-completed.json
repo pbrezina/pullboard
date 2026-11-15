@@ -1,8 +1,14 @@
 {
   "state": "idle",
   "started_at": "2026-11-09T12:00:00Z",
-  "finished_at": "2026-11-09T12:00:14Z",
-  "last_success_at": "2026-11-09T12:00:14Z",
+  "finished_at": "2026-11-09T12:00:30Z",
+  "last_success_at": "2026-11-09T12:00:30Z",
+  "board_revision": 16,
+  "jira_options": {
+    "ready": true,
+    "health": {"source_id": "jira", "name": "Work Jira", "kind": "jira", "status": "ok", "last_success_at": "2026-11-09T12:00:30Z", "last_attempt_at": "2026-11-09T12:00:14Z", "error": null, "retry_at": null, "coverage_notes": []},
+    "progress": {"phase": "completed", "started_at": "2026-11-09T12:00:14Z", "finished_at": "2026-11-09T12:00:30Z", "elapsed_ms": 16000, "groups": [{"name": "example-group", "phase": "completed", "completed_items": 75, "total_items": 75}], "projects": [{"name": "IDM", "phase": "completed", "completed_items": 75, "total_items": 75}, {"name": "RHEL", "phase": "completed", "completed_items": 75, "total_items": 75}]}
+  },
   "sources": [
     {"source_id": "jira", "name": "Work Jira", "kind": "jira", "status": "ok", "last_success_at": "2026-11-09T12:00:14Z", "last_attempt_at": "2026-11-09T12:00:00Z", "error": null, "retry_at": null, "coverage_notes": ["Search indexing and deleted history may omit mentions."]},
     {"source_id": "work-github", "name": "Work GitHub", "kind": "github", "status": "ok", "last_success_at": "2026-11-09T12:00:14Z", "last_attempt_at": "2026-11-09T12:00:00Z", "error": null, "retry_at": null, "coverage_notes": ["Discovery is limited to accessible search results and retained history."]},

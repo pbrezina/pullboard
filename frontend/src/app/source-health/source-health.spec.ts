@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { SourceHealth } from './source-health';
-import { board, sync } from '../testing/fixtures';
+import { board, sync, jiraOptionsStatus } from '../testing/fixtures';
 import type { SourceProgress } from '../core/api-types';
 describe('Source health', () => {
   it('exposes stale cache, backoff, exact retry, and coverage notes', async () => {
@@ -107,6 +107,129 @@ describe('Source health', () => {
     expect(f.componentInstance.degraded()).toBe(0);
     expect(f.nativeElement.querySelectorAll('.chip.ready')).toHaveLength(5);
     expect(f.nativeElement.textContent).toContain('All sources up to date');
+  });
+  it('keeps completed ticket progress independent of unavailable options and exposes per-project finished checks', async () => {
+    const f = TestBed.createComponent(SourceHealth);
+    f.componentRef.setInput('sources', board().sources);
+    f.componentRef.setInput('progress', sync().progress);
+    f.componentRef.setInput('syncing', true);
+    const options = jiraOptionsStatus();
+    options.ready = false;
+    options.health = { ...options.health, status: 'pending', last_success_at: null };
+    options.progress = {
+      ...options.progress,
+      phase: 'fetching',
+      finished_at: null,
+      elapsed_ms: 65000,
+      groups: [{ name: 'Reviewers', phase: 'completed', completed_items: 75, total_items: 75 }],
+      projects: [
+        { name: 'DEV', phase: 'completed', completed_items: 75, total_items: 75 },
+        { name: 'OPS', phase: 'fetching', completed_items: 28, total_items: 75 },
+      ],
+    };
+    f.componentRef.setInput('jiraOptions', options);
+    await f.whenStable();
+    const panel = f.nativeElement.querySelector('.jira-options') as HTMLElement;
+    expect(panel.textContent).toContain('Creation unavailable');
+    expect(panel.textContent).toContain('Discovery complete');
+    expect(panel.textContent).toContain('28 / 75 checks finished');
+    expect(panel.textContent).toContain('eligible and ineligible');
+    const checks = panel.querySelector('progress[aria-label="OPS project eligibility checks"]')!;
+    expect(checks.getAttribute('value')).toBe('28');
+    expect(checks.getAttribute('max')).toBe('75');
+    expect(f.nativeElement.querySelector('[aria-label="Jira refresh"]').textContent).toContain(
+      'Jira tickets',
+    );
+    expect(
+      f.nativeElement.querySelectorAll('.source-progress-grid .source-completed'),
+    ).toHaveLength(2);
+    expect(panel.querySelector('[role="status"], [aria-live]')).toBeNull();
+  });
+  it('keeps groups indeterminate until full pagination, including empty completed memberships', async () => {
+    const f = TestBed.createComponent(SourceHealth);
+    f.componentRef.setInput('sources', board().sources);
+    const options = jiraOptionsStatus('syncing');
+    options.progress = {
+      ...options.progress,
+      phase: 'discovering',
+      groups: [
+        { name: 'Reviewers', phase: 'discovering', completed_items: 0, total_items: null },
+        { name: 'Empty group', phase: 'completed', completed_items: 0, total_items: 0 },
+      ],
+    };
+    f.componentRef.setInput('jiraOptions', options);
+    await f.whenStable();
+    const panel = f.nativeElement.querySelector('.jira-options') as HTMLElement;
+    expect(
+      panel
+        .querySelector('progress[aria-label="Reviewers group membership"]')!
+        .hasAttribute('value'),
+    ).toBe(false);
+    expect(
+      panel
+        .querySelector('progress[aria-label="Jira creation metadata and statuses"]')!
+        .hasAttribute('value'),
+    ).toBe(false);
+    expect(panel.querySelector('progress[aria-label="Empty group group membership"]')).toBeNull();
+    expect(panel.textContent).toContain('0 / 0 members discovered');
+    expect(panel.textContent).toContain('Total unknown');
+  });
+  it.each([true, false])(
+    'reports options failure with ready=%s without failing ticket health',
+    async (ready) => {
+      const f = TestBed.createComponent(SourceHealth);
+      f.componentRef.setInput('sources', board().sources);
+      f.componentRef.setInput('progress', sync().progress);
+      const options = jiraOptionsStatus();
+      options.ready = ready;
+      options.health = {
+        ...options.health,
+        status: 'error',
+        last_success_at: ready ? options.health.last_success_at : null,
+        error: 'Eligibility check failed.',
+      };
+      options.progress.phase = 'failed';
+      f.componentRef.setInput('jiraOptions', options);
+      await f.whenStable();
+      expect(f.componentInstance.degraded()).toBe(0);
+      expect(f.nativeElement.querySelectorAll('.source-progress-grid .source-failed')).toHaveLength(
+        0,
+      );
+      expect(f.nativeElement.querySelector('.jira-options.source-failed').textContent).toContain(
+        'tickets are unaffected',
+      );
+      expect(f.nativeElement.textContent).toContain(
+        ready ? 'Stale cached choices available' : 'Creation unavailable',
+      );
+    },
+  );
+  it('omits the options panel when Jira is disabled', async () => {
+    const f = TestBed.createComponent(SourceHealth);
+    f.componentRef.setInput('sources', []);
+    f.componentRef.setInput('jiraOptions', null);
+    await f.whenStable();
+    expect(f.nativeElement.querySelector('.jira-options')).toBeNull();
+    expect(f.nativeElement.textContent).toContain('No sources configured');
+  });
+  it('shows independent options retry and stale health with idle process-local progress', async () => {
+    const f = TestBed.createComponent(SourceHealth);
+    f.componentRef.setInput('sources', board().sources);
+    const options = jiraOptionsStatus('syncing');
+    options.progress.phase = 'idle';
+    options.health = {
+      ...options.health,
+      status: 'backoff',
+      error: 'Options rate limited.',
+      retry_at: '2026-11-06T15:00:00Z',
+    };
+    f.componentRef.setInput('jiraOptions', options);
+    await f.whenStable();
+    const panel = f.nativeElement.querySelector('.jira-options') as HTMLElement;
+    expect(panel.textContent).toContain('Stale cached choices available');
+    expect(panel.textContent).toContain('Options rate limited.');
+    expect(panel.querySelector('time[datetime="2026-11-06T15:00:00Z"]')).not.toBeNull();
+    expect(f.componentInstance.degraded()).toBe(0);
+    expect(panel.querySelector('progress')).toBeNull();
   });
   it('joins progress by source ID, keeps unknown totals indeterminate, and does not call publishing complete', async () => {
     const f = TestBed.createComponent(SourceHealth);

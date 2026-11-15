@@ -6,7 +6,7 @@ import { BoardStore } from '../core/board-store';
 import { Preferences } from '../core/preferences';
 import { RuntimeMode } from '../core/runtime-mode';
 import type { Purpose } from '../core/api-types';
-import { board, context, foreignMention, issue, pr, runtimeMode } from '../testing/fixtures';
+import { board, context, foreignMention, issue, pr, runtimeMode, sync } from '../testing/fixtures';
 describe('Board views', () => {
   const open = vi.fn();
   const openDialogs: unknown[] = [];
@@ -19,6 +19,7 @@ describe('Board views', () => {
     localStorage.clear();
     window.history.replaceState(null, '', window.location.pathname);
     const store = TestBed.inject(BoardStore);
+    store.sync.set(sync());
     store.board.set(board({ issues: [issue({ sprint_ids: [] })] }));
     store.context.set(context());
     TestBed.inject(RuntimeMode).apply(runtimeMode());
@@ -82,6 +83,28 @@ describe('Board views', () => {
     await f.whenStable();
     expect(f.componentInstance.filters().prTitle).toBe('snapshot');
     expect(f.componentInstance.filters().sprint).toBe('none');
+  });
+  it('preserves deliberate per-tab filters through ticket/options/quarantine publications while syncing', async () => {
+    const f = TestBed.createComponent(BoardView);
+    const preferences = TestBed.inject(Preferences);
+    await f.whenStable();
+    for (const tab of ['attention', 'overview', 'upstream'] as const)
+      preferences.setFilters(tab, {
+        jiraTitle: `${tab} jira`,
+        prTitle: `${tab} pr`,
+        sprint: tab === 'overview' ? 'deliberate-sprint' : 'none',
+        source: 'work',
+        repository: 'chosen-repo',
+      });
+    const before = preferences.value();
+    const store = TestBed.inject(BoardStore);
+    for (const revision of [2, 3, 7]) {
+      store.sync.set({ ...sync('syncing'), board_revision: revision });
+      store.board.set(board({ revision, sprints: [] }));
+      store.context.set(context({ current_sprints: [] }));
+      await f.whenStable();
+      expect(preferences.value()).toEqual(before);
+    }
   });
   it('counts and renders foreign mentions without expanding assigned Overview work', async () => {
     const store = TestBed.inject(BoardStore);

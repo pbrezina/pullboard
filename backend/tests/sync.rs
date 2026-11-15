@@ -147,13 +147,13 @@ async fn source_work_is_bounded_and_a_later_source_starts_while_earlier_sources_
     gates[3].add_permits(1);
     assert_eq!(entered(&mut rx).await, "source-4");
     let waiting = sync.status().await.unwrap();
-    assert_eq!(waiting.progress[3].phase, SourcePhase::Publishing);
+    assert_eq!(waiting.progress[3].phase, SourcePhase::Completed);
     assert!(
         waiting.progress[..3]
             .iter()
             .all(|p| p.phase == SourcePhase::Discovering)
     );
-    assert!(cache.read().await.unwrap().board.pull_requests.is_empty());
+    assert_eq!(cache.read().await.unwrap().board.pull_requests.len(), 1);
     let revision = cache.read().await.unwrap().board.revision;
     for gate in &gates {
         gate.add_permits(1);
@@ -161,7 +161,7 @@ async fn source_work_is_bounded_and_a_later_source_starts_while_earlier_sources_
     let completed = wait_status(&sync, |s| s.state == "idle").await;
     assert!(completed.last_success_at.is_some());
     let board = cache.read().await.unwrap().board;
-    assert_eq!(board.revision, revision + 1);
+    assert_eq!(board.revision, revision + 4);
     assert_eq!(board.pull_requests.len(), 5);
     assert_eq!(
         completed
@@ -176,8 +176,7 @@ async fn source_work_is_bounded_and_a_later_source_starts_while_earlier_sources_
 }
 
 #[tokio::test]
-async fn parallel_source_failure_is_isolated_and_all_results_publish_once_after_the_blocked_source()
-{
+async fn parallel_source_failure_is_isolated_and_success_publishes_before_the_blocked_source() {
     let mut c = config();
     c.forges = ["blocked", "failed", "ready"]
         .map(|id| {
@@ -230,7 +229,7 @@ async fn parallel_source_failure_is_isolated_and_all_results_publish_once_after_
     gates[1].add_permits(1);
     let failure = wait_status(&sync, |s| s.progress[1].phase == SourcePhase::Failed).await;
     gates[2].add_permits(1);
-    let waiting = wait_status(&sync, |s| s.progress[2].phase == SourcePhase::Publishing).await;
+    let waiting = wait_status(&sync, |s| s.progress[2].phase == SourcePhase::Completed).await;
     assert_eq!(waiting.progress[0].phase, SourcePhase::Discovering);
     assert_eq!(
         waiting.progress[1].elapsed_ms,
@@ -241,10 +240,27 @@ async fn parallel_source_failure_is_isolated_and_all_results_publish_once_after_
         waiting.sources[1].last_success_at,
         old.board.sources[1].last_success_at
     );
+    let partial = cache.read().await.unwrap().board;
+    assert_eq!(partial.revision, before.revision + 2);
     assert_eq!(
-        serde_json::to_value(cache.read().await.unwrap().board).unwrap(),
-        serde_json::to_value(&before).unwrap()
+        partial
+            .pull_requests
+            .iter()
+            .find(|p| p.source_id == "ready")
+            .unwrap()
+            .title,
+        "New ready"
     );
+    assert_eq!(
+        partial
+            .pull_requests
+            .iter()
+            .find(|p| p.source_id == "blocked")
+            .unwrap()
+            .title,
+        "Old blocked"
+    );
+    assert_eq!(waiting.board_revision, partial.revision);
     gates[0].add_permits(1);
     let completed = wait_status(&sync, |s| s.state == "idle").await;
     assert!(completed.last_success_at.is_none());
@@ -252,7 +268,7 @@ async fn parallel_source_failure_is_isolated_and_all_results_publish_once_after_
     assert_eq!(completed.progress[1].phase, SourcePhase::Failed);
     assert_eq!(completed.progress[2].phase, SourcePhase::Completed);
     let board = cache.read().await.unwrap().board;
-    assert_eq!(board.revision, before.revision + 1);
+    assert_eq!(board.revision, before.revision + 3);
     for (id, title) in [
         ("blocked", "New blocked"),
         ("failed", "Old failed"),
@@ -358,7 +374,7 @@ async fn simultaneous_identity_verification_keeps_each_sources_quarantine_and_he
 }
 
 #[tokio::test]
-async fn forge_finishes_reading_while_jira_identity_is_blocked_without_publishing_early() {
+async fn forge_publishes_while_jira_identity_is_blocked() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let jira_started = Arc::new(Semaphore::new(0));
     let jira_release = Arc::new(Semaphore::new(0));
@@ -406,12 +422,17 @@ async fn forge_finishes_reading_while_jira_identity_is_blocked_without_publishin
     assert_eq!(entered(&mut rx).await, "test-forge");
     let before = cache.read().await.unwrap().board;
     forge_release.add_permits(1);
-    let waiting = wait_status(&sync, |s| s.progress[1].phase == SourcePhase::Publishing).await;
+    let waiting = wait_status(&sync, |s| s.progress[1].phase == SourcePhase::Completed).await;
     assert_eq!(waiting.progress[0].phase, SourcePhase::Preparing);
-    assert!(waiting.progress.iter().all(|p| p.finished_at.is_none()));
-    assert!(waiting.sources[1].last_success_at.is_none());
-    assert_eq!(cache.read().await.unwrap().board.revision, before.revision);
-    assert!(cache.read().await.unwrap().board.pull_requests.is_empty());
+    assert!(waiting.progress[0].finished_at.is_none());
+    assert!(waiting.progress[1].finished_at.is_some());
+    assert!(waiting.sources[1].last_success_at.is_some());
+    assert_eq!(
+        cache.read().await.unwrap().board.revision,
+        before.revision + 1
+    );
+    assert_eq!(cache.read().await.unwrap().board.pull_requests.len(), 1);
+    assert_eq!(waiting.board_revision, before.revision + 1);
     // Metadata is deliberately absent: Jira fails independently after its identity
     // is released, while the completed forge data still publishes successfully.
     jira_release.add_permits(1);
@@ -507,7 +528,7 @@ async fn successful_write_during_sync_schedules_one_nonoverlapping_followup() {
     })
     .await
     .unwrap();
-    assert_eq!(cache.read().await.unwrap().board.revision, 4);
+    assert_eq!(cache.read().await.unwrap().board.revision, 3);
     cancel.cancel();
     handle.await.unwrap();
 }
@@ -986,7 +1007,7 @@ async fn concurrent_readers_see_old_or_new_combined_snapshot_never_half_publicat
     });
     for _ in 0..100 {
         let s = cache.read().await.unwrap();
-        if s.board.generated_at.is_none() {
+        if s.board.sources.iter().all(|h| h.last_success_at.is_none()) {
             assert!(s.board.issues.is_empty() && s.board.pull_requests.is_empty());
         } else {
             assert_eq!(s.board.issues.len(), 1);

@@ -64,7 +64,7 @@ export class BoardView {
   }
   async ticket(pr: PullRequest, purpose: Purpose) {
     const mode = this.mode.value();
-    if (!mode || this.mode.error() || this.openingTicket) return;
+    if (!mode || this.mode.error() || this.openingTicket || !this.store.jiraOptionsReady()) return;
     // Freeze gesture intent and focus before loading code; never rebase a delayed action.
     const data: PrTicketDialogData = {
       kind: 'pr',
@@ -76,7 +76,12 @@ export class BoardView {
     this.openingTicket = true;
     try {
       const { TicketDialog } = await import('../ticket-dialog/ticket-dialog');
-      if (this.destroy.destroyed || this.dialog.openDialogs.length) return;
+      if (
+        this.destroy.destroyed ||
+        this.dialog.openDialogs.length ||
+        !this.store.jiraOptionsReady()
+      )
+        return;
       this.dialog.open(TicketDialog, {
         data,
         ariaLabelledBy: 'ticket-heading',

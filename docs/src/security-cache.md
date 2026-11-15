@@ -33,19 +33,24 @@ reaches disk. Apply your host's swap/encryption policy accordingly.
 
 ## Coherent snapshots
 
-SQLite is an ephemeral cache initialized without migrations. A publication is one
-coherent combined snapshot, written atomically in a transaction. A successful
-source refresh replaces that source's snapshot. A same-account failure preserves its
-last-good data and last-success timestamp while updating health. The browser never
-sees a delete/insert gap as a half-empty board.
+SQLite is an ephemeral cache initialized without migrations. Each source publishes
+its **complete card snapshot independently and atomically as soon as it is ready**:
+Jira tickets and board sprints replace together; each forge's PRs and assigned
+upstream issues replace together. There is no per-ticket/page publication and no
+wait for slower sources or creation options. A board read is coherent latest committed
+state, not one all-sources refresh generation. Serialized transactions merge into
+that state and reconcile cross-source links without lost updates or delete/insert gaps.
+A same-scope failure retains only that domain's last-good data and last-success
+timestamp with stale health; it cannot undo another source/domain's successful commit.
 
 On startup persisted private snapshots, identities and weblinks are quarantined
 until the current credentials' upstream principal is verified. Only an exact scope
 match can restore data: source ID, kind, normalized service URL, real account ID,
 and relevant project/board or forge-filter scope. Changed principal/service or
-incompatible configured scope purges old private data before later read failures
-can expose it; derived cross-source links are recomputed. Jira group/default policy
-is instead committed with its complete choice generation, never mixed into old pools.
+incompatible configured scope quarantines old private data in **both card and options
+domains** before later read failures can expose it; derived cross-source links are
+recomputed. Jira group/default policy is instead committed with its complete choice
+generation, never mixed into old pools.
 No token/token fingerprint is an identity key. Failed bootstrap exposes no old
 account data. Identity verification
 is published independently of the full issue refresh, so an identity may be visible
@@ -70,18 +75,23 @@ paths and repository policy, with no redirects or arbitrary-host reads. See
 
 Jira choices are a typed **refresh-time SQLite snapshot**: complete project/type
 metadata/capabilities/team/status choices, all permitted assignees and board sprints,
-plus their effective group/default policy. They publish atomically with Jira cards
-and identity, not as a separate authorization database. Overlapping refreshes coalesce;
+plus their effective group/default policy. They publish as one **separate complete
+atomic generation**, independently of cards. Options keep their own committed sprint
+snapshot: validation never mixes in newer board sprints or partially refreshed policy.
+This cache is not a separate authorization database. Overlapping refreshes coalesce;
 options/drafts/create use a single committed generation and never repeat group/user/
 metadata discovery. Compatible restored choices remain quarantined until current
 identity verification.
 
-A failed refresh retains complete same-scope last-good choices and context as usable
-but stale; Jira source health covers their freshness. Before usable initial discovery,
-ticket endpoints fail explicitly with 503 readiness or 502 discovery/ambiguity errors,
-not empty success. An active refresh leaves previous choices intact until commit.
-Group/default-policy changes become effective only on successful refresh, not by
-reevaluating new policy against an old pool. Final create validates the latest
+A failed options refresh retains complete same-scope last-good choices as usable
+but stale. `SyncStatus.jira_options` independently exposes their `ready`, `health`
+and `progress`; Jira ticket health does not describe choice freshness. Before verified
+complete initial discovery and commit, creation is blocked and options/drafts/create
+fail explicitly with 503 readiness or 502 discovery/ambiguity errors, not empty success.
+An active refresh leaves previous complete choices ready until replacement. Expected
+assignability is not verification: no optimistic assignments or partial pools appear.
+Group/default-policy changes become effective only on successful options publication,
+not by reevaluating new policy against an old pool. Final create validates the latest
 committed generation independent of the editor's last search; no-longer-allowed
 selections are rejected without replay. Jira still enforces current write permissions.
 See [choice freshness](jira.md#refresh-time-choices-and-freshness).
@@ -104,8 +114,10 @@ Other sources can still refresh successfully.
 
 The live status strip uses `/api/sync` health/progress. A current failure or backoff
 is shown even while the published board still carries the preceding snapshot's
-successful health. Fetch success becomes `ok` only after the combined transaction
-commits. Progress alone does not publish cards, identities or a new board revision;
+successful health. Fetch success becomes `ok` only after that domain's transaction
+commits. Jira options have independent persisted health and attempt/success/retry
+timestamps; an options failure never fails ticket health or un-completes ticket progress.
+Progress alone does not publish cards, identities or a new board revision;
 account-verification quarantine still overrides old-data retention.
 
 ## Per-source progress
@@ -121,10 +133,10 @@ There is no aggregate percentage or invented work total.
 | --- | --- |
 | `idle` | Process startup before any job; no work counted. |
 | `queued` | Accepted job, waiting to start this source. |
-| `preparing` | Verifying identity and preparing account metadata/policy. |
+| `preparing` | Verifying identity once and preparing ticket/display prerequisites, not creation choices. |
 | `discovering` | Enumerating pages and deduplicating candidate issues/PRs. |
 | `fetching` | Reading required details/history/links and evaluating candidates. |
-| `publishing` | Fetching finished; waiting for or performing the combined atomic publication. |
+| `publishing` | Fetching finished; waiting for or performing this source's atomic publication. |
 | `completed` | Publication committed successfully. |
 | `failed` | Source/preparation/publication failure; no partial source replacement. |
 | `backoff` | Rate-limited attempt, or source skipped until its retry deadline. |
@@ -140,9 +152,11 @@ the current tab's rows. For example, 25 evaluated Jira candidates might yield
 Until the full unique workload is known, the total is `null` and the active bar is
 indeterminate, with the actual count shown as “total unknown.” A known positive total
 permits an item fraction; `0 / 0` is genuinely empty successful work, not an estimated
-percentage. At `publishing`, all items are fetched but the board is **not yet updated**.
-The previous board remains visible until the combined snapshot commits atomically.
-A publication failure preserves its revision/data and marks waiting sources failed.
+percentage. At `publishing`, all this source's items are fetched but its replacement
+is **not yet committed**; other sources may already be visible. A publication failure
+leaves that domain's old data intact and does not advance the revision. Already committed
+sources stay completed. A source's counters, finish time and elapsed duration freeze at
+its own commit, even while the job remains `syncing` for other sources or options.
 
 Elapsed time comes from a server monotonic clock: it includes preparation, discovery,
 fetching and publication waiting/work, but excludes queue time and skipped backoff.
@@ -152,10 +166,52 @@ actual work and duration. Each new job resets every source's progress; a coalesc
 request does not. Terminal progress stays until the next job and resets on restart;
 it is not persisted in SQLite or preferences.
 
+## Ticket-first scheduling and options progress
+
 The default worker interval is **3600 seconds**. A manual refresh coalesces with an
-existing job; jobs do not overlap. Within that job, up to four source read futures
-run concurrently, with independent outcomes and one final atomic publication. A
-source failure does not cancel unrelated source reads; sources sharing an origin
+existing job; jobs do not overlap. Up to four source read futures run concurrently,
+each publishing independently. Identity is verified once per source attempt. Jira
+performs bounded independent assigned/mention searches and sprint reads, deduplicates
+the full inventory and hydrates tickets concurrently. Jira tickets, board/current
+sprints and the real first configured project's key/name become available without
+waiting for creation choices. That project's issue types may still be empty pending
+options metadata; a later project is never substituted.
+
+After Jira ticket work, creation metadata/statuses and complete group discovery can
+overlap remaining forge card reads. The **standalone lowest-priority eligibility
+batch starts only after all sources' card fetching has terminated and creation
+metadata/groups are complete**. Failed/backoff sources count as terminal for this
+barrier, not automatic options failures. One bounded queue checks project/account
+pairs across projects rather than finishing one project's batch before the next.
+All work belongs to the cancellable job; no detached batch or partial options commit.
+
+The separate Jira creation-options panel reports metadata phase/duration, group
+discovery and **per-project eligibility**, never ticket counts:
+
+- Group pagination remains indeterminate (`0`, unknown total) until complete verified
+  membership discovery. Completed counts are unique members, including honest `0/0`.
+  Repeated group names and overlapping member accounts are deduplicated; an account
+  is checked once per project. With no configured groups, complete bounded directory
+  discovery is used, without an invented all-users group row.
+- Project totals are unknown until the complete candidate population is known.
+  Then counters count finished project/account checks, **including negative
+  eligibility results**, not retained assignees, pages or requests. Failed partial
+  checks do not increment. A finished project row alone does not make options ready.
+- `preparing`/`discovering` cover metadata/groups, `fetching` is final eligibility,
+  and `publishing`/`completed` distinguish staging from the complete options commit.
+  No aggregate options percentage or fabricated metadata total is defined.
+- Options health and complete scoped choices persist independently of cards; readiness
+  still requires current identity verification. Active timing and group/project progress
+  are process-local and reset on restart/new jobs, like ticket progress.
+
+All stages retain the existing shared per-origin HTTP cap, default **4** requests,
+configurable in the single YAML; item concurrency also defaults to 4. Nested work
+never multiplies these limits. Pagination, body/time limits and backoff remain
+mandatory across both Jira domains. There is no raised cap, hybrid eligibility or
+new bulk API work, and no promised or measured speedup for this scheduling change.
+See [configured bounds](configuration.md#controls).
+
+A source failure does not cancel unrelated source reads; sources sharing an origin
 can still share rate-limit backoff. Real successful Jira actions schedule refresh;
 simulated ones do not mutate issue/source snapshots or schedule refresh. Ticket
 validation uses committed choices; normal refresh, explicit URL lookup and enabled
@@ -163,12 +219,28 @@ PR AI drafting still have their own read/provider calls. Simulations perform zer
 upstream writes and publish no fabricated cache data. The UI may continue showing
 the last good data while refreshing or backing off.
 
-The browser polls sync about every two seconds while active and every 10–30 seconds
-while idle, reloading board/context at observed job/publication boundaries. Mode has
-separate two-second polling. These are lightweight HTTP polls, not a stream; brief
-phases may be missed. Job last-success time advances only when all configured sources
-succeed and publication commits, not when a source fails or is skipped in backoff.
-With no sources, refresh is a successful no-op with empty progress.
+## Publication-aware polling
+
+Every committed cache snapshot advances `Board.revision`, including options-only,
+persisted health and scope quarantine/restoration commits. Pure progress updates do
+not. `/api/sync` exposes the latest committed value as `SyncStatus.board_revision`.
+The browser polls about every two seconds while active and every 10–30 seconds while
+idle, reloading Board/Context on revision changes **during the job**, not just when
+it finishes. Mode has separate two-second polling. These are HTTP polls, not a stream;
+phases or multiple revisions may be missed without losing committed data.
+
+Clients read status before dependent Board/Context reads, consume a revision only
+after those reads succeed, retry failed reads and reject late regressive responses.
+Mid-job publications preserve filters, deliberate sprint choices, editor edits and
+captured Test/Live revisions; they never rebase or resubmit an action. Exact wire and
+ordering rules remain in `api/CONTRACT.md` and `api/openapi.json`.
+
+The job stays `syncing` until all source/options work terminates. Its last-success
+time advances only when **every configured ticket source and Jira options (if enabled)
+commit successfully**, never on required failure or skipped backoff. Fresh cards can
+coexist with stale ready options; options can succeed despite a ticket failure if
+their prerequisites are verified. With no sources, options is null and refresh is a
+successful no-op with empty progress.
 
 Stop the server before removing **only your configured cache file** to recover
 from incompatible/corrupt disposable state. Never use broad deletion commands on

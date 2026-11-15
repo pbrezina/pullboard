@@ -317,7 +317,7 @@ async fn initial_readiness_failed_discovery_and_genuinely_empty_pools_are_distin
 }
 
 #[tokio::test]
-async fn metadata_assignee_and_history_failures_retain_the_entire_last_good_generation() {
+async fn metadata_assignee_and_history_failures_retain_only_their_own_last_good_domain() {
     for endpoint in [
         "/rest/api/3/field",
         "/rest/api/3/project/DEV/statuses",
@@ -338,31 +338,71 @@ async fn metadata_assignee_and_history_failures_retain_the_entire_last_good_gene
         .await;
         override_get(&server, "/rest/api/3/search/jql", json!({"isLast":true,"issues":[{"id":"1","key":"DEV-1","fields":{"summary":"New issue","project":{"key":"DEV"},"issuetype":{"name":"Task"},"status":{"name":"Open"},"assignee":jira_user("me"),"reporter":null,"created":"2026-01-01T00:00:00Z","updated":"2026-01-02T00:00:00Z"}}]})).await;
         mock_get(&server, "/rest/api/3/issue/DEV-1/remotelink", json!([])).await;
+        mock_get(
+            &server,
+            "/rest/api/3/issue/DEV-1/comment",
+            json!({"startAt":0,"maxResults":100,"total":0,"comments":[]}),
+        )
+        .await;
         fail_get(&server, endpoint).await;
         assert!(j.refresh_metadata().await.is_err(), "{endpoint}");
         let after = app.cache.read().await.unwrap();
+        let ticket_failed = endpoint == "/rest/api/3/field" || endpoint.ends_with("/comment");
+        let options_failed = !endpoint.ends_with("/comment");
+        if options_failed {
+            assert_eq!(
+                serde_json::to_value(&after.jira_choices).unwrap(),
+                serde_json::to_value(&before.jira_choices).unwrap()
+            );
+        } else {
+            assert_eq!(
+                after.jira_choices.as_ref().unwrap().projects[0].name,
+                "Uncommitted name"
+            );
+        }
+        if ticket_failed {
+            assert_eq!(
+                serde_json::to_value(&after.board.issues).unwrap(),
+                serde_json::to_value(&before.board.issues).unwrap()
+            );
+            assert_eq!(
+                after.board.sources[0].last_success_at,
+                before.board.sources[0].last_success_at
+            );
+        } else {
+            assert_eq!(after.board.issues[0].title, "New issue");
+            assert!(
+                after.board.sources[0].last_success_at > before.board.sources[0].last_success_at
+            );
+        }
         assert_eq!(
-            serde_json::to_value(&after.jira_choices).unwrap(),
-            serde_json::to_value(&before.jira_choices).unwrap()
+            after.board.sources[0].status,
+            if ticket_failed { "error" } else { "ok" }
         );
+        let options_health = after.jira_options_health.as_ref().unwrap();
         assert_eq!(
-            serde_json::to_value(&after.board.issues).unwrap(),
-            serde_json::to_value(&before.board.issues).unwrap()
+            options_health.status,
+            if options_failed { "error" } else { "ok" }
         );
-        assert_eq!(
-            after.board.sources[0].last_success_at,
-            before.board.sources[0].last_success_at
-        );
-        assert_eq!(after.board.sources[0].status, "error");
         assert!(
-            !after.board.sources[0]
-                .error
-                .as_ref()
+            !serde_json::to_string(&after.board.sources)
+                .unwrap()
+                .contains("private")
+        );
+        assert!(
+            !serde_json::to_string(options_health)
                 .unwrap()
                 .contains("private")
         );
         let count = server.received_requests().await.unwrap().len();
-        assert_eq!(j.projects().await[0].name, "Development");
+        assert_eq!(
+            j.projects().await[0].name,
+            if options_failed {
+                "Development"
+            } else {
+                "Uncommitted name"
+            }
+        );
         assert_eq!(
             j.options("DEV", Purpose::Review, None, "")
                 .await
@@ -393,8 +433,7 @@ async fn wait_idle(sync: &Syncer) {
 }
 
 #[tokio::test]
-async fn failed_atomic_commit_never_publishes_choices_or_success_and_the_next_commit_switches_both()
-{
+async fn failed_options_commit_preserves_choices_without_undoing_committed_tickets() {
     let dir = tempfile::tempdir().unwrap();
     let server = MockServer::start().await;
     mock_jira(&server).await;
@@ -423,15 +462,21 @@ async fn failed_atomic_commit_never_publishes_choices_or_success_and_the_next_co
         serde_json::to_value(&after.jira_choices).unwrap(),
         serde_json::to_value(&before.jira_choices).unwrap()
     );
-    assert_eq!(after.board.revision, before.board.revision);
-    assert_eq!(after.board.generated_at, before.board.generated_at);
-    assert_eq!(
-        after.board.sources[0].last_success_at,
-        before.board.sources[0].last_success_at
-    );
+    assert_eq!(after.board.revision, before.board.revision + 1);
+    assert!(after.board.generated_at > before.board.generated_at);
+    assert!(after.board.sources[0].last_success_at > before.board.sources[0].last_success_at);
     let live = app.sync.status().await.unwrap();
-    assert_eq!(live.sources[0].status, "error");
-    assert_eq!(live.progress[0].phase, SourcePhase::Failed);
+    assert_eq!(live.sources[0].status, "ok");
+    assert_eq!(live.progress[0].phase, SourcePhase::Completed);
+    assert_eq!(live.board_revision, after.board.revision);
+    let options = live.jira_options.unwrap();
+    assert!(options.ready);
+    assert_eq!(options.health.status, "error");
+    assert_eq!(options.progress.phase, SourcePhase::Failed);
+    assert_eq!(
+        options.health.last_success_at,
+        before.jira_options_health.as_ref().unwrap().last_success_at
+    );
     assert_eq!(
         app.jira.as_ref().unwrap().projects().await[0].name,
         "Development"
@@ -499,6 +544,55 @@ async fn principal_change_quarantines_cached_choices_before_a_failed_refresh() {
 }
 
 #[tokio::test]
+async fn service_and_project_scope_changes_quarantine_persisted_options_as_well_as_cards() {
+    for change_service in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let server = MockServer::start().await;
+        mock_jira(&server).await;
+        let mut c = config();
+        c.server.database = directory.path().join("scope.sqlite");
+        c.jira = Some(jira(&server.uri()));
+        let app = App::build(c.clone()).await.unwrap();
+        app.jira.as_ref().unwrap().refresh_metadata().await.unwrap();
+        assert!(app.sync.status().await.unwrap().jira_options.unwrap().ready);
+        drop(app);
+        if change_service {
+            c.jira.as_mut().unwrap().base_url = format!("{}/other-service", server.uri());
+            mock_get(&server, "/other-service/rest/api/3/myself", jira_user("me")).await;
+        } else {
+            c.jira.as_mut().unwrap().projects = vec!["OPS".into()];
+        }
+        let app = App::build(c).await.unwrap();
+        let startup = app.sync.status().await.unwrap();
+        assert!(!startup.jira_options.unwrap().ready);
+        app.jira.as_ref().unwrap().identity().await.unwrap();
+        let verified = app.sync.status().await.unwrap();
+        assert!(verified.board_revision > startup.board_revision);
+        let options = verified.jira_options.unwrap();
+        assert!(!options.ready);
+        assert!(options.health.last_success_at.is_none());
+        assert_eq!(options.progress.phase, SourcePhase::Idle);
+        let cached = app.cache.read().await.unwrap();
+        assert!(cached.jira_choices.is_none());
+        assert!(cached.jira_project.is_none());
+        assert!(cached.board.issues.is_empty() && cached.board.sprints.is_empty());
+        let requests = server.received_requests().await.unwrap().len();
+        let key = &app.config.jira.as_ref().unwrap().projects[0];
+        assert_eq!(
+            app.jira
+                .as_ref()
+                .unwrap()
+                .options(key, Purpose::Review, None, "")
+                .await
+                .unwrap_err()
+                .code,
+            "jira_not_ready"
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), requests);
+    }
+}
+
+#[tokio::test]
 async fn changed_group_and_default_policy_are_committed_together_not_applied_to_a_restored_pool() {
     let dir = tempfile::tempdir().unwrap();
     let server = MockServer::start().await;
@@ -516,7 +610,25 @@ async fn changed_group_and_default_policy_are_committed_together_not_applied_to_
         serde_yaml::from_str("implementation: {issue_type: Story, assignee: null}").unwrap();
     let app = App::build(c).await.unwrap();
     let j = app.jira.as_ref().unwrap();
+    let startup = app.sync.status().await.unwrap();
+    let startup_options = startup.jira_options.unwrap();
+    assert!(!startup_options.ready);
+    assert_eq!(startup_options.progress.phase, SourcePhase::Idle);
+    assert!(
+        startup_options.progress.groups.is_empty() && startup_options.progress.projects.is_empty()
+    );
     j.identity().await.unwrap();
+    let restored = app.sync.status().await.unwrap();
+    assert!(restored.board_revision > startup.board_revision);
+    let restored_options = restored.jira_options.unwrap();
+    assert!(restored_options.ready);
+    assert_eq!(restored_options.health.status, "error");
+    assert_eq!(restored_options.progress.phase, SourcePhase::Idle);
+    assert_eq!(restored_options.progress.elapsed_ms, 0);
+    assert!(
+        restored_options.progress.started_at.is_none()
+            && restored_options.progress.finished_at.is_none()
+    );
     let old = j
         .options("DEV", Purpose::Implementation, None, "")
         .await

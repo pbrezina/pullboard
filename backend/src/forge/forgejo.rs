@@ -159,7 +159,10 @@ impl Forge for Forgejo {
         })
     }
     async fn discover_with_progress(&self, progress: Progress) -> Result<SourceData> {
-        let me: User = self.http.get("user", &[]).await?;
+        self.discover_verified(self.identity().await?, progress)
+            .await
+    }
+    async fn discover_verified(&self, me: Identity, progress: Progress) -> Result<SourceData> {
         progress.discovering();
         // Search account involvement across all accessible repositories, not just
         // /user/repos: a mention or review request can be in an unjoined public repo.
@@ -185,10 +188,10 @@ impl Forge for Forgejo {
         progress.fetching(Some(
             u64::try_from(found.len()).map_err(|_| Error::upstream())?,
         ));
-        let mut data=SourceData{coverage_notes:vec!["Forgejo/Codeberg discovers account-created, assigned, mentioned and review-requested PRs with paginated global account searches, including private repositories permitted by the token and public repositories the account has not joined. Search indexing, team-only review requests, deleted comments and bot identities not marked by the API may be unavailable. Review threads use the review ID and code location, with resolver metadata when exposed. Requested-review timestamps and description edit history vary across server versions; unknown history is partial and no request timer is invented.".into()],identity:Some(Identity{source_id:self.config.id.clone(),kind:self.config.kind,account_id:me.id.to_string(),display_name:me.person(&self.config.base_url).display_name,username:me.login.clone(),profile_url:me.person(&self.config.base_url).url}),..Default::default()};
+        let mut data=SourceData{coverage_notes:vec!["Forgejo/Codeberg discovers account-created, assigned, mentioned and review-requested PRs with paginated global account searches, including private repositories permitted by the token and public repositories the account has not joined. Search indexing, team-only review requests, deleted comments and bot identities not marked by the API may be unavailable. Review threads use the review ID and code location, with resolver metadata when exposed. Requested-review timestamps and description edit history vary across server versions; unknown history is partial and no request timer is invented.".into()],identity:Some(me.clone()),..Default::default()};
         let mut evaluated: Vec<_> = stream::iter(found.into_iter().enumerate())
             .map(|(index, (repository, number))| {
-                let me = &me.login;
+                let me = &me.username;
                 let progress = &progress;
                 async move {
                     let (owner, name) = repository.split_once('/').ok_or_else(Error::upstream)?;
@@ -203,7 +206,7 @@ impl Forge for Forgejo {
             .await?;
         evaluated.sort_by_key(|(index, _)| *index);
         for (_, pr) in evaluated {
-            if attention::mentions(&pr.description, &me.login) && !pr.is_mine {
+            if attention::mentions(&pr.description, &me.username) && !pr.is_mine {
                 data.coverage_notes.push(format!(
                         "Description mention on {}: the server does not expose a body-revision timestamp. Inspect the PR directly; no mention timer was fabricated.",
                         pr.url

@@ -38,8 +38,15 @@ YAML initializes it, the UI confirms changes, and restart resets it. It is never
 During refresh, each source has its own progress panel above the board; real failures
 and backoff also stay prominent. Healthy idle collapses completed counts/durations
 into Source health Details. Successful refreshes are green even with neutral coverage
-notes; attention-history completeness is separate. The old cards remain visible until
-atomic publication. Equal 300px-high Jira/PR cards show useful summaries in Upstream
+notes; attention-history completeness is separate. Each complete source snapshot
+publishes independently as soon as ready; Jira tickets/current sprints do not wait
+for creation choices. A separate options panel shows metadata, group discovery and
+per-project final eligibility. Options have independent health/readiness: stale
+complete choices stay usable, while first-run creation waits for a verified complete
+generation. Polling loads publications mid-job without losing filters or editor edits.
+See [refresh scheduling and freshness](security-cache.md).
+
+Equal 300px-high Jira/PR cards show useful summaries in Upstream
 Pull Requests and concise attention summaries before excerpts, with full
 keyboard-accessible details preserved. Upstream issues instead use full-width compact rows.
 

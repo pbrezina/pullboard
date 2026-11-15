@@ -47,6 +47,7 @@ describe('Editable ticket dialog', () => {
       ],
     });
     TestBed.inject(BoardStore).context.set(context());
+    TestBed.inject(BoardStore).sync.set(sync());
     TestBed.inject(RuntimeMode).value.set(runtimeMode());
     http = TestBed.inject(HttpTestingController);
   });
@@ -691,7 +692,7 @@ describe('Editable ticket dialog', () => {
     expect(c.model().status).toBe('');
     expect(f.nativeElement.textContent).toContain('Workflow status was cleared');
   });
-  it('uses live Jira failure health for retained cached choices, and keeps populated controls stable during explicit refresh', async () => {
+  it('uses independent options failure health for retained choices, and keeps controls stable during explicit refresh', async () => {
     const f = await ready();
     const c = f.componentInstance;
     const health = {
@@ -707,7 +708,7 @@ describe('Editable ticket dialog', () => {
     };
     const store = TestBed.inject(BoardStore);
     store.board.set(board({ sources: [{ ...health, status: 'ok', error: null }] }));
-    store.sync.set({ ...sync(), sources: [health] });
+    store.sync.set({ ...sync(), jira_options: { ...sync().jira_options!, health } });
     c.model.update((m) => ({
       ...m,
       title: 'Keep title',
@@ -735,11 +736,21 @@ describe('Editable ticket dialog', () => {
     });
     store.board.set(
       board({
+        revision: 2,
         sources: [
           { ...health, status: 'ok', error: null, last_success_at: '2026-11-03T00:00:00Z' },
         ],
       }),
     );
+    await f.whenStable();
+    http.expectNone((r) => r.url === '/api/jira/options');
+    store.sync.set({
+      ...sync(),
+      jira_options: {
+        ...sync().jira_options!,
+        health: { ...health, status: 'ok', error: null, last_success_at: '2026-11-03T00:00:00Z' },
+      },
+    });
     await f.whenStable();
     http.expectOne((r) => r.url === '/api/jira/options').flush(options());
     await f.whenStable();
@@ -768,6 +779,54 @@ describe('Editable ticket dialog', () => {
     );
     http.expectNone('/api/jira/issues');
     f.nativeElement.remove();
+  });
+  it('preserves all edits and captured mode through mid-job commits, ticket failures and options quarantine', async () => {
+    const f = await ready();
+    const c = f.componentInstance;
+    const store = TestBed.inject(BoardStore);
+    c.model.update((m) => ({
+      ...m,
+      title: 'Keep this editor',
+      description: 'My edits',
+      assignee: 'reviewer',
+      sprint: 'future-1',
+      status: 'Review',
+      points: '3',
+    }));
+    const edits = c.model();
+    const s = sync('syncing');
+    s.board_revision = 2;
+    s.sources[1] = { ...s.sources[1], status: 'error', error: 'Tickets failed.' };
+    store.sync.set(s);
+    store.board.set(board({ revision: 2 }));
+    store.context.set(context({ current_sprints: [], mode_revision: 'other-context-mode' }));
+    await f.whenStable();
+    expect(c.model()).toEqual(edits);
+    expect(c.staleChoices()).toBe(false);
+    expect(c.createBlocked()).toBe(false);
+    expect(c.review.captured().mode_revision).toBe('mode-test-1');
+    http.expectNone((r) => r.url === '/api/jira/options');
+    store.sync.set({
+      ...s,
+      board_revision: 3,
+      jira_options: {
+        ...s.jira_options!,
+        ready: false,
+        health: { ...s.jira_options!.health, status: 'pending', last_success_at: null },
+      },
+    });
+    await f.whenStable();
+    expect(c.createBlocked()).toBe(true);
+    expect(f.nativeElement.textContent).toContain('creation is disabled');
+    c.save(new Event('submit'));
+    http.expectNone('/api/jira/issues');
+    expect(c.model()).toEqual(edits);
+    store.sync.set({ ...s, board_revision: 4 });
+    await f.whenStable();
+    expect(c.createBlocked()).toBe(false);
+    expect(c.model()).toEqual(edits);
+    expect(c.review.captured().mode_revision).toBe('mode-test-1');
+    http.expectNone((r) => r.url === '/api/jira/options');
   });
   it('enables the assignee selector only after the complete scoped pool is loaded', async () => {
     const f = TestBed.createComponent(TicketDialog);

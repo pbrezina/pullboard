@@ -114,6 +114,7 @@
     [sources]="sources()"
     [progress]="store.sync()?.progress ?? []"
     [syncing]="store.sync()?.state === 'syncing'"
+    [jiraOptions]="store.sync()?.jira_options ?? null"
   />
   <main id="main-content" tabindex="-1"><app-board-view /></main>
   <footer class="app-footer">

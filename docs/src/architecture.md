@@ -19,7 +19,7 @@ fixes. Do not delete unfamiliar work or claim tests you did not run.
 | `backend/src/attention.rs` | Timestamp-based independent stream resolution |
 | `backend/src/jira.rs`, `jira/discovery.rs` | Refresh-time complete scoped choices/policy, Cloud identity/typed metadata/statuses, board sprints, candidate eligibility and explicit write gates |
 | `backend/src/ai.rs` | Selected untrusted PR proposal generation and deterministic fallback |
-| `backend/src/cache.rs`, `sync.rs` | Atomic SQLite cards/choices/policy snapshots, coalesced refresh worker and live per-source progress/health |
+| `backend/src/cache.rs`, `sync.rs` | Independent atomic source snapshots and complete options generations, coalesced ticket-first worker, publication revisions and separate ticket/options progress/health |
 | `backend/src/runtime_mode.rs` | Process-wide mode/revision, atomic toggle and action admission |
 | `backend/src/api.rs`, `main.rs` | Same-origin routes/static assets, CLI and graceful lifecycle |
 | `frontend/src/app/core/` | Typed API/state/display preferences, sync/mode polling and explicit stale-mode review |
@@ -40,10 +40,14 @@ one YAML → validated configuration → credentials resolved
           ↓
 principal verification → account-scoped cache restore/purge → read-only discovery
           ↓
-typed Jira metadata / normalized threads/items/source health
+normalized source cards/sprints → independent atomic SQLite source publications
           ↓
-coalesced sync → atomic SQLite snapshot → same-origin REST → Angular signals
-       └──────→ process-local source progress/health → HTTP polling
+creation metadata/groups → wait for all source reads → bounded eligibility queue
+          ↓
+complete atomic options generation (own sprints/policy)
+          ↓
+latest committed cache → same-origin REST → Angular signals
+       └──────→ board_revision + separate ticket/options status → HTTP polling
 
 selected cached PR → AI/template → editable draft → explicit user submit
                                                 ↓
@@ -61,18 +65,22 @@ AI or add attention. Manual content stays outside Board/SQLite in a process-loca
 policy. Refresh preserves those selections; eviction/restart/scope invalidation
 requires explicit recovery, not automatic create replay. Jira cloning does not
 introduce duplicate searches, clone state or broad Jira/forge scans. See
-[upstream issue flow](upstream-issues.md) and [v1.4 API](api.md).
+[upstream issue flow](upstream-issues.md) and [v1.5 API](api.md).
 
 Keep upstream IDs and timestamps real. Never infer handled attention from a commit,
 manufacture missing event times, synthesize Jira IDs, or conceal coverage gaps. A
 new adapter must preserve last-good snapshots on failure and expose limitations.
 Only verified same-scope snapshots may be retained; startup quarantine must not
-expose a prior account. Identity bootstrap is distinct from complete Jira snapshot
-readiness. Normal refresh publishes complete Jira choices and effective policy with
-cards; options/drafts/create use that committed generation without repeating metadata,
-group or per-user discovery. Failure retains complete same-scope last-good choices
-as stale. Policy changes take effect only at successful commit, not by combining new
-rules with an old pool. Final create uses the latest committed choices rather than
+expose a prior account. Identity bootstrap and ticket visibility are distinct from
+complete options readiness. Normal refresh publishes complete Jira choices, their own
+sprints and effective policy as one independent generation; options/drafts/create use
+that committed generation without repeating metadata, group or per-user discovery.
+Options failure retains complete same-scope last-good choices as stale and usable,
+with independent health/readiness, without undoing fresh cards. Before a verified
+complete generation, creation is blocked; no optimistic assignments are exposed.
+Scope quarantine applies immediately to incompatible cards and choices. Policy changes
+take effect only at successful options commit, not by combining new rules with an old
+pool or newer board sprints. Final create uses the latest committed choices rather than
 trusting the client picker; Jira enforces current write permissions.
 Adding a provider method must not expand forge write capability.
 
@@ -90,10 +98,16 @@ Source health describes refresh success, not universal API coverage: successful
 Jira/forge sources are `ok` with neutral coverage notes; per-item partial attention
 remains independent. One locked process-local sync state tracks phases, unique fully
 evaluated candidates, nullable totals and monotonic elapsed time independently of
-SQLite. The old board stays visible through `publishing`; only a successful combined
-transaction advances its revision. Failures retain verified same-scope data and
-surface live failed/backoff health without pretending old data is fresh. Clients
-join progress by source ID and poll rather than adding a streaming transport.
+SQLite. Each source's old cards stay visible through its own `publishing`; its
+commit freezes source progress while other work continues. Every committed snapshot,
+including options-only, health and quarantine/restoration commits, advances the shared
+board revision. Failures retain only their own verified same-scope data and surface
+independent live failed/backoff health without pretending old data is fresh. Clients
+join ticket progress by source ID and use `SyncStatus.jira_options` for choices.
+They poll `SyncStatus.board_revision` during and between jobs, reload Board/Context
+on changes and retry failed dependent reads without consuming the revision. Late reads
+cannot regress applied state. Polling preserves filters, editor edits and captured
+mode revisions, without automatic replay; there is no new streaming transport.
 Active refreshes and real failures/backoff retain separate panels; healthy idle
 collapses completed counters/durations into the existing Source health details.
 
@@ -116,8 +130,11 @@ light/dark/system themes remain available. No density setting is introduced.
 The separate Upstream issues tab uses compact full-width rows, not this card grid;
 its instance/repository/title preferences are independent of Jira/PR tab filters.
 
-The header's current project comes from the first YAML Jira project's discovered
-metadata; only pattern-matching active sprints are current. Overview selects an
+The header's real current project key/name comes from the first YAML Jira project,
+with a minimal early lookup if needed and no later-project fallback. It and board/current
+sprints publish with ticket/display work, without waiting for creation metadata;
+issue types may remain empty until options commit. Only pattern-matching active
+sprints are current. Overview selects an
 actual ID initially/reset only for one match; zero/multiple matches require deliberate
 choice, while Attention defaults all/no sprint. No synthetic eligible-sprints filter
 or automatic union remains. Every ticket editor starts Unassigned/No sprint/no
@@ -137,27 +154,45 @@ token environment overrides, auth UI, migration state or background Jira writes.
 
 ## Bounded read scheduling
 
-There is one coalesced refresh job, with at most four source read futures active
-concurrently; this source ceiling is not an extra configuration knob. Independent
-source outcomes are collected without short-circuiting other sources on failure,
-then ordered deterministically for one final atomic snapshot publication. Each
-successful source replaces its data; each failed source retains only its verified
-same-scope last-good data and gets its own stale/error/backoff health. A fast source
-can wait in `publishing` for a slower source; it does not publish cards early.
-Identity verification/quarantine remains a separate safety gate, not a partial
-item publication.
+There is one owned/cancellable coalesced refresh job, with at most four source read
+futures active concurrently; this source ceiling is not an extra configuration knob.
+Verify identity once per source attempt. Independent assigned/mention searches and
+sprint reads overlap within bounds; deduplicate the full candidate inventory before
+Jira hydration. Each complete source card snapshot publishes immediately and
+independently: Jira tickets/sprints together, each forge's PRs/upstream issues together.
+No source waits for slower sources or creation choices to publish. Failures do not
+short-circuit unrelated sources, expose partial pages/items or undo another commit;
+each failed domain retains only its own verified same-scope last-good data and health.
+Identity verification/quarantine remains a separate safety gate.
+
+After Jira ticket work, bounded creation metadata/status and complete group discovery
+may overlap remaining forge reads. Only after **all source card fetching terminates
+and creation discovery is complete** does standalone lowest-priority eligibility run.
+One bounded queue spans project/account pairs, deduplicating overlapping group accounts
+before checks; it is not sequential per-project batches or a detached worker.
+Group pagination stays indeterminate until complete; project progress counts finished
+checks, including negative eligibility results, never ticket counts or only retained
+assignees. Complete options publish in their own atomic transaction and health domain.
+Overall job success requires every configured ticket source and enabled Jira options
+to succeed, even though their publications and failures are independent.
 
 Within each source, bounded item hydration overlaps independent required reads.
 Cursor-dependent pagination stays sequential. GitHub batches obey both the item
 limit and the effective batch size; there is no unbounded task or request fanout.
 All these reads pass through the origin-shared request budget, whose permit lasts
-through response consumption. See [configuration](configuration.md#controls) for
+through response consumption. The existing per-origin HTTP cap defaults to **4**,
+as does item concurrency; actual limits come from the single YAML. Nested stages do
+not multiply or silently raise caps. Pagination, response/time bounds and backoff
+remain unchanged; hybrid eligibility and new bulk APIs are out of scope. See
+[configuration](configuration.md#controls) for
 the three YAML knobs and [providers](providers.md#shared-request-budgets-and-rate-limits)
-for conservative cross-credential sharing and quota/backoff behavior. This changes
-read scheduling, not the public API, attention semantics or write permissions.
+for conservative cross-credential sharing and quota/backoff behavior. Contract v1.5
+adds publication/options status, not new create fields, attention rules or write
+permissions. There is no measured speedup claim for this scheduling change.
 
-Application-owned INFO diagnostics report safe source read duration/item counts
-and origin-budget idle counters; dependency logging is WARN and above. They do not
+Application-owned INFO diagnostics report safe source read/publication durations,
+creation discovery/eligibility timing, first-card/options/job timing and origin-budget
+idle counters; dependency logging is WARN and above. They do not
 include raw upstream URLs, query/payload contents or credentials. See
 [log interpretation](troubleshooting.md#refresh-timing-and-safe-logs) before using
 these diagnostics for measurement.

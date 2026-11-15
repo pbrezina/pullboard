@@ -147,23 +147,33 @@ admitted simulations stay zero-write after switching Live. Stale requests must f
 before upstream calls, without automatic replay; preserve the accepted-create/unknown-key
 success safeguard and disconnected-outcome duplicate protection.
 
-Contract 1.4 choice-cache fixtures cover atomic cards/choices/policy publication,
-initial readiness versus genuinely empty pools, complete last-good retention after
-metadata/assignee/history failures, failed-commit isolation, principal quarantine and
-policy changes at successful refresh. Options, both draft flows and both simulated
-create flows assert zero repeated choice-discovery requests. Status tests reject
+Contract 1.5 refresh/choice-cache fixtures cover independent atomic source and options
+publication, early real first-project/sprint context, initial readiness versus genuinely
+empty pools, each domain's complete last-good retention, failed-commit isolation,
+principal/service/config quarantine in both domains and policy changes only at successful
+options publication. Gated fixtures hold discovery/eligibility while asserting cards are
+already visible, enforce the all-source/discovery barrier and shared HTTP cap, and cover
+indeterminate full group pagination, deduplication, per-project positive/negative check
+counts, independent persisted options backoff and owned cancellation. Options, both
+draft flows and both simulated create flows assert zero repeated choice-discovery
+requests. Status tests reject
 unknown/ambiguous names before create and check destination-ID no-op/direct-transition
 behavior, warnings on failure and no duplicate creation. Backend context fixtures
 check YAML project order; frontend tests cover the discovered current-project header,
 matching-current-sprint links/end dates, unique/zero/
 multiple Overview defaults/reset, broad Attention defaults, selection preservation,
 legacy preference migration, local virtualized assignee search/keyboard/no-results,
-stale choices and lazy editor load failures/late opens.
+stale choices and lazy editor load failures/late opens. Publication-aware polling tests
+cover mid-job and options-only revisions, missed phases, dependent-read failure/retry,
+late-response ordering and preserved filters/editor edits/captured mode revisions.
+The mocked `frontend/e2e/ticket-first-refresh.spec.ts` exercises independent creation
+readiness and accessible group/project progress in light/dark themes; it is not live
+tenant or performance verification.
 
 Focused cache verification uses localhost mocks, no credentials:
 
 ```sh
-toolbox run -c tb-devel cargo test --manifest-path backend/Cargo.toml --locked --offline --test jira_choice_cache
+toolbox run -c tb-devel cargo test --manifest-path backend/Cargo.toml --locked --offline --test jira_choice_cache --test ticket_first
 ```
 
 For focused refresh/config verification using localhost mocks, run:
@@ -179,9 +189,12 @@ and GitHub batches/connection pagination. They are correctness checks, not live
 performance measurements. Keep cursor-dependent pages sequential and preserve
 last-good retention, deterministic output and fully evaluated progress counts
 when changing scheduling; never replace these with elapsed-time speed assertions.
-Performance results are workload-specific, not a target refresh speed. For a
-separately authorized live read measurement, distinguish source read-stage logs
-from progress time including publication waiting, and origin-cumulative request
+The existing YAML per-origin HTTP cap defaults to 4 and remains shared through nested
+search, hydration, discovery and final eligibility work; item concurrency also defaults
+to 4. Tests must not justify raising caps, hybrid eligibility or new bulk APIs. No
+measured speedup is claimed for ticket-first scheduling. For a separately authorized
+live read measurement, distinguish source reads, each source commit, time to first
+cards, options-ready time and total job duration, and origin-cumulative request
 counters from per-job counts; see [safe logs](troubleshooting.md#refresh-timing-and-safe-logs).
 No provider writes are needed to measure refresh, and no secrets or raw traces
 belong in measurement reports.
@@ -189,7 +202,8 @@ belong in measurement reports.
 ### Measured local refresh example
 
 This historical comparison predates contract 1.4's complete refresh-time choice
-discovery and is **not a measurement of the current cache implementation**.
+discovery **and v1.5 ticket-first independent publications**. It is **not a measurement
+of the current cache implementation or evidence of a v1.5 speedup**.
 An authorized live comparison on 2026-11-09 used the then-default limits with one Jira
 source and one GitHub source: 60 unique Jira candidates and 14 PRs, producing
 49 Jira cards, 14 PR cards and 7 sprints.
@@ -210,7 +224,8 @@ performed. API schemas and the hardened container smoke checks passed.
 These are individual workload/network observations, not a benchmark guarantee or
 a suggested rate-limit allowance. In earlier runs of the same optimization, total
 refresh took 13–14 s; provider latency also varies between runs. Use source
-read-stage logs to separate work from waiting for the final publication.
+read-stage logs to separate work from publication waiting in that historical design;
+current v1.5 sources publish independently and options have separate timing.
 
 For offline contract/schema/example validation, with Python `jsonschema` and
 `openapi-spec-validator` installed in an isolated environment:

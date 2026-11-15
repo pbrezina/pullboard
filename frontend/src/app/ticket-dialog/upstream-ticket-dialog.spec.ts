@@ -14,6 +14,7 @@ import {
   options,
   person,
   runtimeMode,
+  sync,
   upstreamDraft,
   upstreamIssue,
 } from '../testing/fixtures';
@@ -48,6 +49,7 @@ describe('Upstream issue in the shared ticket editor', () => {
       ],
     });
     http = TestBed.inject(HttpTestingController);
+    TestBed.inject(BoardStore).sync.set(sync());
     TestBed.inject(BoardStore).board.set(board());
     TestBed.inject(BoardStore).context.set(
       context({

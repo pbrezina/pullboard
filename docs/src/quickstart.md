@@ -70,6 +70,65 @@ and may contain unreleased changes. To use a published image, replace
 `ghcr.io/pbrezina/pullboard:latest` or `ghcr.io/pbrezina/pullboard:nightly`, and add
 `--pull=always` to fetch updates.
 
+## Manual YAML and container
+
+Create `config/local.yaml` in your editor with the configuration below. Replace
+the Jira URL, email, project, board, team, sprint pattern and tokens with your
+own values. Keep test mode on while setting things up: Jira writes are simulated,
+not sent. Use literal tokens or a supported OS keyring reference, never environment
+variables, and do not commit secrets. `config/local.yaml` is Git-ignored.
+
+```sh
+umask 077
+mkdir -p config
+```
+
+```yaml
+server:
+  bind: 0.0.0.0
+  port: 8080
+  allowed_origins: [http://localhost:3333, http://127.0.0.1:3333]
+  static_directory: /app/frontend
+  database: /data/pullboard-cache.sqlite
+
+read_only_test_mode: true
+
+jira:
+  base_url: https://your-company.atlassian.net
+  email: you@example.com
+  token: {value: REPLACE_WITH_JIRA_TOKEN}
+  projects: [PROJECT_KEY]
+  board_id: 1
+  team: Your team
+  sprint_name_pattern: 'TEAM'
+
+forges:
+  - id: github
+    kind: github
+    base_url: https://api.github.com
+    token: {value: REPLACE_WITH_READ_ONLY_GITHUB_TOKEN}
+```
+
+Save with owner-only permissions, then run the published image with rootless
+Podman on Linux. Replace `:latest` with `:nightly` for development builds; see the
+[GHCR package](https://github.com/pbrezina/pullboard/pkgs/container/pullboard)
+for available versions.
+
+```sh
+chmod 600 config/local.yaml
+podman run --pull=always --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+  --userns=keep-id --user "$(id -u):$(id -g)" \
+  --tmpfs /data:rw,nosuid,nodev,noexec,size=64m,mode=0700,U \
+  -p 127.0.0.1:3333:8080 \
+  -v "$PWD/config/local.yaml:/app/config.yaml:ro,Z" \
+  ghcr.io/pbrezina/pullboard:latest
+```
+
+Open <http://localhost:3333>. Access is loopback-only and the cache is temporary;
+Ctrl+C stops the container. See the [configuration guide](configuration.md) for
+all settings and credentials. Manual container keyring use requires the
+[restricted Secret Service bridge](keyring-container.md).
+
 ## Real accounts
 
 ```sh

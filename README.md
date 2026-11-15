@@ -33,15 +33,13 @@ PullBoard's container as a systemd user service:
 **Latest release:**
 
 ```sh
-curl --fail --location --proto '=https' --proto-redir '=https' \
-  https://github.com/pbrezina/pullboard/releases/latest/download/pullboard-setup.sh | sh
+curl -fL https://github.com/pbrezina/pullboard/releases/latest/download/pullboard-setup.sh | sh
 ```
 
 **Nightly (unreleased development builds):**
 
 ```sh
-curl --fail --location --proto '=https' --proto-redir '=https' \
-  https://github.com/pbrezina/pullboard/releases/download/nightly/pullboard-setup.sh | sh -s -- --nightly
+curl -fL https://github.com/pbrezina/pullboard/releases/download/nightly/pullboard-setup.sh | sh -s -- --nightly
 ```
 
 Choose **Install and start**, then open <http://localhost:3333> (local access

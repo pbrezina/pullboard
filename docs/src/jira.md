@@ -126,8 +126,10 @@ cap (default 4, configurable in YAML), item bounds, pagination, response/time li
 and backoff. Nested work does not multiply the cap. No hybrid/bulk API work or raised
 cap is part of this change, and no measured speedup is claimed.
 
-The options progress panel keeps group membership indeterminate until full pagination
-and deduplication complete, then shows unique member totals. Per-project eligibility
+Inside **Source health**, Jira's compact group/project rows share one options phase
+and elapsed time; there is no separate metadata progress panel. Group membership
+stays indeterminate until full pagination and deduplication complete, then shows
+unique member totals. Per-project eligibility
 counts finished checks, **both eligible and ineligible**, not people retained. Totals
 are unknown until the complete candidate inventory is known. A project finishing its
 checks does not expose a partial pool or make the full options generation ready. See

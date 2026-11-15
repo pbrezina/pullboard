@@ -108,8 +108,9 @@ They poll `SyncStatus.board_revision` during and between jobs, reload Board/Cont
 on changes and retry failed dependent reads without consuming the revision. Late reads
 cannot regress applied state. Polling preserves filters, editor edits and captured
 mode revisions, without automatic replay; there is no new streaming transport.
-Active refreshes and real failures/backoff retain separate panels; healthy idle
-collapses completed counters/durations into the existing Source health details.
+All progress stays in the original Source health disclosure as compact rows, including
+completed bars. Jira adds group/project rows with one shared choices phase/duration.
+Routine health timestamps and coverage notes are behind source Diagnostics.
 
 Runtime mode is initialized from YAML, shared across clients and never persisted.
 The same lock compares revision and captures action mode before I/O/business checks,

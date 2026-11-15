@@ -35,13 +35,14 @@ alternative application configuration sources. Secrets are never read from
 environment variables. The sole runtime override is the shared Test/Live action mode:
 YAML initializes it, the UI confirms changes, and restart resets it. It is never persisted.
 
-During refresh, each source has its own progress panel above the board; real failures
-and backoff also stay prominent. Healthy idle collapses completed counts/durations
-into Source health Details. Successful refreshes are green even with neutral coverage
+All progress stays inside the original expandable **Source health** box. Compact rows
+show names, bars, counts and elapsed time, and remain available after refresh finishes.
+Routine timestamps and coverage notes are under each source's **Diagnostics**.
+Successful refreshes are green even with neutral coverage
 notes; attention-history completeness is separate. Each complete source snapshot
 publishes independently as soon as ready; Jira tickets/current sprints do not wait
-for creation choices. A separate options panel shows metadata, group discovery and
-per-project final eligibility. Options have independent health/readiness: stale
+for creation choices. Jira adds group-discovery and per-project eligibility rows;
+the choices phase and shared elapsed time appear once above them. Options have independent health/readiness: stale
 complete choices stay usable, while first-run creation waits for a verified complete
 generation. Polling loads publications mid-job without losing filters or editor edits.
 See [refresh scheduling and freshness](security-cache.md).

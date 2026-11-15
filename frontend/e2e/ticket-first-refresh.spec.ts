@@ -100,18 +100,23 @@ test('mid-job tickets, indeterminate groups, exact project checks and independen
   await expect(page.locator('.work-card')).toHaveCount(2);
   const create = page.getByRole('button', { name: 'Create review ticket', exact: true });
   await expect(create).toBeDisabled();
-  await expect(page.getByRole('region', { name: 'Jira refresh', exact: true })).toContainText(
-    'completed',
-  );
-  const choices = page.locator('.jira-options');
-  await choices.locator('summary').focus();
+  const health = page.locator('.health-panel');
+  await expect(health).not.toHaveAttribute('open');
+  await expect(page.getByRole('progressbar')).toHaveCount(0);
+  await health.locator(':scope > summary').focus();
   await page.keyboard.press('Enter');
+  await expect(
+    page.getByRole('region', { name: 'Jira health', exact: true }).locator('.chip'),
+  ).toHaveText('ok');
+  const choices = page.locator('.jira-options');
   await expect(
     choices.getByRole('progressbar', { name: 'Reviewers group membership' }),
   ).not.toHaveAttribute('value');
+  await expect(choices.locator('.options-heading')).toContainText('Choices: discovering');
   await expect(
     choices.getByRole('progressbar', { name: 'Jira creation metadata and statuses' }),
-  ).toBeVisible();
+  ).toHaveCount(0);
+  await expect(page.locator('app-source-health > :not(.health-panel)')).toHaveCount(0);
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   const reads = boardReads;
   status = {
@@ -130,12 +135,25 @@ test('mid-job tickets, indeterminate groups, exact project checks and independen
   const checks = choices.getByRole('progressbar', { name: 'DEV project eligibility checks' });
   await expect(checks).toHaveAttribute('value', '28');
   await expect(checks).toHaveAttribute('max', '75');
-  await expect(choices.getByText('28 / 75 checks finished')).toBeVisible();
+  await expect(choices.getByText('28 / 75', { exact: true })).toBeVisible();
+  await expect(choices.locator('.options-heading')).toContainText('1m 5s');
+  await expect(choices.locator('.progress-row')).toHaveCount(2);
+  for (const row of await health.locator('.progress-row').all()) {
+    expect((await row.boundingBox())!.height).toBeLessThanOrEqual(28);
+  }
+  expect((await health.boundingBox())!.height).toBeLessThan(250);
   expect(boardReads).toBe(reads);
   expect(optionReads).toBe(0);
   await page.getByRole('button', { name: 'Dark theme', exact: true }).click();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await page.screenshot({ path: 'test-results/ticket-first-options-progress.png', fullPage: true });
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+  }
+  await page.setViewportSize({ width: 1440, height: 1080 });
 
   // Initial failed options do not undo the completed ticket snapshot.
   status = {
@@ -158,10 +176,10 @@ test('mid-job tickets, indeterminate groups, exact project checks and independen
   };
   snapshot = board({ revision: 3 });
   await expect(page.getByText('Snapshot 3 / Updated', { exact: false })).toBeVisible();
-  await expect(choices).toContainText('No usable choices');
+  await expect(choices).toContainText('Creation unavailable.');
   await expect(create).toBeDisabled();
   await expect(page.locator('.work-card')).toHaveCount(2);
-  await expect(page.locator('.source-progress-grid .source-failed')).toHaveCount(0);
+  await expect(health.locator('.source-detail > .error-text')).toHaveCount(0);
 
   status = {
     ...sync('syncing'),
@@ -207,4 +225,11 @@ test('mid-job tickets, indeterminate groups, exact project checks and independen
   await expect(page.getByLabel('Jira title', { exact: true })).toHaveValue('cache');
   await expect(page.getByLabel('PR title', { exact: true })).toHaveValue('snapshot');
   await expect(page.getByText('Snapshot 5 / Updated', { exact: false })).toBeVisible();
+  status = { ...status, state: 'idle', finished_at: '2026-11-06T12:01:00Z' };
+  await expect(health.locator(':scope > summary')).toContainText('Creation options need attention');
+  await expect(health).toHaveAttribute('open');
+  await expect(health.locator('progress')).toHaveCount(3);
+  await health.locator(':scope > summary').click();
+  await expect(page.getByRole('progressbar')).toHaveCount(0);
+  expect((await health.boundingBox())!.height).toBeLessThan(60);
 });

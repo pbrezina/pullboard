@@ -12,8 +12,8 @@
 | Old cards after refresh | Each failed verified same-scope card source keeps only its own last-good cards (Jira includes board sprints); options have independent retention/health. Other successful sources publish immediately. Startup quarantines both domains until identity verification; incompatible account/service/config scope cannot expose them. Inspect ticket health/backoff/permissions/bounds. |
 | Green source with coverage notes | Expected after a successful refresh. Notes are neutral API/history information, not partial/error source health. Per-item partial attention coverage is independent; green does not prove complete upstream history. |
 | Evaluated count exceeds cards | Counts are unique fully fetched/evaluated candidates, including those excluded afterward, not retained cards, pages or attention threads. |
-| Completed progress panels disappeared | Expected when healthy and idle: expand Source health Details for completed counts/durations. Active refreshes and real failures/backoff still show separate panels above the board. |
-| Total unknown / empty bar | `null` means inventory not yet known, not zero; active work is indeterminate. `0 / 0` means genuinely empty completed work, not a fabricated percentage. |
+| Progress bars are hidden | Expand Source health. All bars stay inside this original box, during and after refresh. Each source's Diagnostics contains routine timestamps and coverage notes. |
+| Unknown total / empty bar | `?` displays a `null` total: inventory is not yet known, not zero; active work is indeterminate. `0 / 0` means genuinely empty completed work, not a fabricated percentage. |
 | Fetch complete but old cards visible | `publishing` waits for that source's own atomic transaction, not slower sources or options. Do not infer publication from a full item bar; check phase, `board_revision` and live sync health. A source publication failure preserves its old data without undoing another source's commit. |
 | Source completed but refresh still running | Expected: source counters/duration freeze at its own commit; other sources or Jira options may still be active. Compare read-stage, source-commit and job-finished logs, not just total job time. |
 | Fresh Jira tickets but creation unavailable | Tickets/current sprints/real first project publish before options. Creation waits for a verified complete options generation; inspect `jira_options.ready`, health and metadata/group/project progress, not ticket health. |
@@ -70,7 +70,7 @@ switch. Diagnostics omit raw upstream URLs, query/payload contents and credentia
 - `source refresh reads finished` records the configured `source_id`,
   `completed_items`, `elapsed_ms` and `succeeded`. Its duration covers preparation,
   discovery and fetching before publication waiting, so it isolates the read stage
-  from the progress panel's longer completion duration. It is not pure network
+  from the progress row's longer completion duration. It is not pure network
   time: request-budget waits and item evaluation are included. A failed read's
   count is only fully evaluated items, not a successful partial snapshot.
 - `source snapshot committed` reports that source's transaction/revision and frozen

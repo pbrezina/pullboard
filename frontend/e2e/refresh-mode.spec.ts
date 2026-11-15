@@ -306,20 +306,21 @@ test('healthy idle source counters collapse into keyboard-accessible neutral cov
   await expect(page.locator('.source-progress-grid')).toHaveCount(0);
   await expect(page.locator('.source-failed')).toHaveCount(0);
   await expect(page.getByText('All sources up to date', { exact: true })).toBeVisible();
-  await expect(page.locator('.progress-history').first()).not.toBeVisible();
+  await expect(page.locator('.progress-row').first()).not.toBeVisible();
   await page.screenshot({ path: 'test-results/all-sources-success-collapsed.png', fullPage: true });
-  await page.locator('.health-panel summary').focus();
+  await page.locator('.health-panel > summary').focus();
   await page.keyboard.press('Enter');
   await expect(
     page
       .getByRole('region', { name: 'Mock jira health', exact: true })
-      .locator('.progress-history'),
-  ).toHaveText('completed: 0 / 0 evaluated / 1s');
+      .locator('.progress-row')
+      .first(),
+  ).toHaveText('Tickets0 / 01s');
   await expect(
     page
       .getByRole('region', { name: 'Mock codeberg health', exact: true })
-      .locator('.progress-history'),
-  ).toHaveText('completed: 4 / 4 evaluated / 1s');
+      .locator('.progress-row'),
+  ).toHaveText('Items4 / 41s');
   await expect(page.locator('.coverage-note')).toHaveCount(5);
   await expect(page.locator('.health-panel .chip.ready')).toHaveCount(5);
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
@@ -339,11 +340,13 @@ test('healthy idle source counters collapse into keyboard-accessible neutral cov
     })),
   });
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
-  await expect(page.locator('.source-progress-grid .source-progress')).toHaveCount(5);
-  await expect(page.locator('.source-progress-grid progress')).toHaveCount(5);
+  await expect(page.locator('.health-panel .source-detail')).toHaveCount(5);
+  await expect(page.locator('.health-panel .source-detail > .progress-row progress')).toHaveCount(
+    5,
+  );
   await expect(
-    page.getByRole('region', { name: 'Mock codeberg refresh', exact: true }),
-  ).toContainText('4 evaluated / total unknown');
+    page.getByRole('region', { name: 'Mock codeberg health', exact: true }),
+  ).toContainText('4 / ?');
   await page.screenshot({ path: 'test-results/all-sources-active.png', fullPage: true });
 });
 
@@ -363,9 +366,9 @@ test('honest per-source progress retains old cards and fetches missed follow-up 
     elapsed_ms: 65000,
   };
   api.progress(status);
-  await expect(
-    page.locator('.source-progress-grid').getByText('7 evaluated / total unknown'),
-  ).toBeVisible();
+  await expect(page.getByRole('progressbar')).toHaveCount(0);
+  await page.locator('.health-panel > summary').click();
+  await expect(page.locator('.health-panel').getByText('7 / ?', { exact: true })).toBeVisible();
   await expect(
     page.getByRole('progressbar', { name: 'Work GitHub evaluated items' }),
   ).not.toHaveAttribute('value');
@@ -377,7 +380,7 @@ test('honest per-source progress retains old cards and fetches missed follow-up 
     ...status,
     progress: [{ ...status.progress[0], phase: 'publishing', total_items: 7 }],
   });
-  await expect(page.getByText('Fetched; waiting for atomic publication.')).toBeVisible();
+  await expect(page.locator('.health-panel .chip').first()).toHaveText('publishing');
   expect(api.counts().boardReads).toBe(1);
   const failed = {
     ...status,
@@ -389,7 +392,9 @@ test('honest per-source progress retains old cards and fetches missed follow-up 
     ],
   };
   api.progress(failed);
-  await expect(page.locator('.source-failed')).toContainText('Actual upstream read failed.');
+  await expect(page.locator('.health-panel .source-detail > .error-text')).toContainText(
+    'Actual upstream read failed.',
+  );
   await page.screenshot({ path: 'test-results/source-progress-failed.png', fullPage: true });
   expect(api.counts().boardReads).toBe(1);
   api.progress({ ...sync('syncing'), started_at: '2026-11-06T12:05:00Z' }, 2);

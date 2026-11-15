@@ -133,7 +133,7 @@ claim complete upstream history. Per-item `Attention.coverage` can independently
   not a successful truncated refresh: that source keeps its last good snapshot.
 
 An empty queue is therefore not proof that every upstream conversation is handled.
-Read source-specific **Coverage information** in Source health, last-success time and
+Read source-specific **Diagnostics** in Source health, last-success time and
 any error/backoff before acting. Failed required reads/pages are real refresh failures,
 not neutral coverage notes; they retain last-good data marked stale. See
 [refresh progress](security-cache.md#per-source-progress) for counts and publication.

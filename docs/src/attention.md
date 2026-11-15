@@ -71,13 +71,13 @@ reviewers, assignees, Jira link count and a short plain-text description; Jira c
 show assignee, PR link count and a description preview. Attention cards use concise summaries before the
 prominent discussion excerpts. Full content remains available in details.
 
-During refresh, separate source progress panels above the board show actual phase,
-evaluated items and elapsed time; real failures/backoff remain visible there too.
-Healthy idle shows the green Source health summary, with completed counts/durations
-in its existing keyboard-expandable Details. Each complete source publishes its own
+Expand **Source health** for compact progress rows with names, bars, evaluated counts
+and elapsed time; completed rows remain there after refresh. Errors/backoff are inside
+the same box, and routine timestamps/coverage notes are under **Diagnostics**.
+Each complete source publishes its own
 cards independently as soon as ready, freezing its progress while other work continues.
-Jira creation options have separate readiness/health and metadata, group and per-project
-eligibility progress; an options failure does not make fresh Jira cards stale. Initial
+Jira creation options have separate readiness/health, a compact choices phase and group/per-project
+eligibility rows; an options failure does not make fresh Jira cards stale. Initial
 creation waits for a verified complete options generation; stale complete choices remain
 usable. Polling loads commits mid-job without resetting filters or dialog edits. See
 [atomic publication and options progress](security-cache.md#ticket-first-scheduling-and-options-progress).

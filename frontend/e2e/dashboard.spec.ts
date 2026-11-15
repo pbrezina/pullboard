@@ -408,11 +408,12 @@ test('representative partial-history card hides coverage warnings and preserves 
     bounds,
     'Representative warnings must fit without hiding source or attention information',
   ).toMatchObject({ overflow: 0 });
-  await page.locator('.health-panel summary').click();
+  await page.locator('.health-panel > summary').click();
+  await page.locator('[aria-label="Work GitHub diagnostics"]').click();
   await expect(
     page.locator('.health-panel').getByText('Older review history is unavailable.'),
   ).toBeVisible();
-  await page.locator('.health-panel summary').click();
+  await page.locator('.health-panel > summary').click();
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 844 });
     await card.scrollIntoViewIfNeeded();
@@ -1237,11 +1238,14 @@ test('mobile layout has no horizontal overflow and keeps accessible controls', a
 test('stale and backoff conditions retain cards and disclose source coverage', async ({ page }) => {
   await mockApi(page, { degraded: true });
   await page.goto('/');
-  await expect(page.getByText('Stale snapshot', { exact: false }).first()).toBeVisible();
-  await page.locator('.health-panel summary').click();
+  await expect(
+    page.locator('.work-card').getByText('Stale snapshot', { exact: false }).first(),
+  ).toBeVisible();
+  await page.locator('.health-panel > summary').click();
   await expect(
     page.locator('.health-panel').getByText('Source rate limit reached.', { exact: false }),
   ).toBeVisible();
+  await page.locator('[aria-label="Work GitHub diagnostics"]').click();
   await expect(
     page.locator('.health-panel').getByText('Older review history is unavailable.'),
   ).toBeVisible();

@@ -100,7 +100,7 @@ See [choice freshness](jira.md#refresh-time-choices-and-freshness).
 
 Health states are exactly `pending`, `ok`, `error`, `backoff`. Successful complete
 refreshes are **always `ok` (green)** for Jira and every forge, even with nonempty
-`coverage_notes`. Expand Source health → **Coverage information** for neutral
+`coverage_notes`. Expand **Source health → Diagnostics** for neutral
 API/history limitations. These notes do not make a successful source amber or imply
 complete upstream history. Per-item `Attention.coverage: "partial"` is independent;
 unknown attention history is never treated as answered.
@@ -122,11 +122,13 @@ account-verification quarantine still overrides old-data retention.
 
 ## Per-source progress
 
-During an ongoing refresh, configured sources have separate panels/bars above the
-board, joined by stable source ID, with actual phase, fully evaluated item count,
-known/unknown total and elapsed time. Real failures/backoff remain prominent there.
-When healthy and idle, the panels collapse: expand the existing **Source health →
-Details** to read completed counts and durations. This uses no new display preference.
+All source and Jira group/project progress bars stay inside the existing expandable
+**Source health** box, joined by stable source ID. Compact rows show names, bars,
+fully evaluated counts, known/unknown totals and elapsed time. Completed rows remain
+after refresh finishes. Jira's choices phase and shared options elapsed time appear
+once above its group/project rows; individual group/project durations are not reported.
+Errors/backoff remain visible inside the box; routine timestamps and coverage notes
+are under each source's **Diagnostics**. This uses no new display preference.
 There is no aggregate percentage or invented work total.
 
 | Phase | Meaning |
@@ -150,7 +152,7 @@ the current tab's rows. For example, 25 evaluated Jira candidates might yield
 9 retained cards; that is not an incomplete refresh (illustrative numbers only).
 
 Until the full unique workload is known, the total is `null` and the active bar is
-indeterminate, with the actual count shown as “total unknown.” A known positive total
+indeterminate, with the actual count and `?` for the unknown total. A known positive total
 permits an item fraction; `0 / 0` is genuinely empty successful work, not an estimated
 percentage. At `publishing`, all this source's items are fetched but its replacement
 is **not yet committed**; other sources may already be visible. A publication failure
@@ -185,8 +187,8 @@ barrier, not automatic options failures. One bounded queue checks project/accoun
 pairs across projects rather than finishing one project's batch before the next.
 All work belongs to the cancellable job; no detached batch or partial options commit.
 
-The separate Jira creation-options panel reports metadata phase/duration, group
-discovery and **per-project eligibility**, never ticket counts:
+Jira's compact choices rows inside Source health report a shared phase/duration,
+group discovery and **per-project eligibility**, never ticket counts:
 
 - Group pagination remains indeterminate (`0`, unknown total) until complete verified
   membership discovery. Completed counts are unique members, including honest `0/0`.

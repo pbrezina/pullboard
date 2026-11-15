@@ -8,26 +8,49 @@ fail() {
 }
 
 nightly=false
-need_url=false
+need_value=false
+seen=' '
 for argument do
-    if [ "$need_url" = true ]; then
-        case "$argument" in ''|--*) fail '--jira-cloud-url requires an HTTPS tenant root.' ;; esac
-        need_url=false
+    if [ "$need_value" = true ]; then
+        case "$argument" in ''|--*) fail 'A Jira option requires a nonempty value. Use --help.' ;; esac
+        need_value=false
         continue
     fi
+    option=${argument%%=*}
+    case "$option" in
+        --jira-cloud-url|--jira-url|--jira-projects|--jira-board-id|--jira-groups|--jira-team-field|--jira-team|--jira-sprint-name-pattern)
+            case "$seen" in *" $option "*) fail 'Repeated Jira option. Use each Jira option only once.' ;; esac
+            seen="$seen$option "
+            case "$argument" in
+                *=) fail 'A Jira option requires a nonempty value. Use --help.' ;;
+                *=*) ;;
+                *) need_value=true ;;
+            esac
+            continue ;;
+    esac
     case "$argument" in
         --nightly) nightly=true ;;
         --no-color) ;;
-        --jira-cloud-url) need_url=true ;;
-        --jira-cloud-url=) fail '--jira-cloud-url requires an HTTPS tenant root.' ;;
-        --jira-cloud-url=*) ;;
         -h|--help)
             cat <<'HELP'
-Usage: pullboard-setup.sh [--nightly] [--no-color] [--jira-cloud-url HTTPS_TENANT_ROOT]
+Usage: pullboard-setup.sh [--nightly] [--no-color] [JIRA_OPTIONS]
+
+Jira options (accept --option=value or --option value):
+  --jira-url URL                    HTTPS Jira Cloud tenant root
+  --jira-projects KEY1,KEY2          Project keys, primary first (1..100)
+  --jira-board-id ID                Positive numeric board ID
+  --jira-groups GROUP1,GROUP2        Exact assignee-group names (at least one)
+  --jira-team-field NAME            Exact semantic team field name, not an ID
+  --jira-team NAME                  Exact team option name
+  --jira-sprint-name-pattern REGEX  Bounded Rust regex (max 4096 UTF-8 bytes)
+  --jira-cloud-url URL              Legacy editable URL prefill; conflicts with --jira-url
 
 Run the full interactive PullBoard setup wizard on Linux x86-64.
 Stable is the default; --nightly downloads the rolling prerelease and preselects
-the nightly image (editable in the wizard). The Jira URL is only an editable prefill.
+the nightly image (editable in the wizard). Supplied Jira settings skip their
+prompts after verification; missing settings and each user's email remain interactive.
+Existing-config updates need confirmation. Changed tenants never authorize sending
+saved tokens without separate consent. Lists are comma-separated; quote spaces/regexes.
 Enter credentials in the wizard, never as command-line or environment values.
 Requires a terminal, curl, gzip, sha256sum and standard POSIX utilities.
 Downloads are private, checksum-verified, and removed on exit; nothing is installed
@@ -37,7 +60,11 @@ HELP
         *) fail 'Unsupported option. Use --help; credentials must be entered in the wizard.' ;;
     esac
 done
-[ "$need_url" = false ] || fail '--jira-cloud-url requires an HTTPS tenant root.'
+[ "$need_value" = false ] || fail 'A Jira option requires a nonempty value. Use --help.'
+case "$seen" in
+    *' --jira-url '*)
+        case "$seen" in *' --jira-cloud-url '*) fail 'Use --jira-url or --jira-cloud-url, not both.' ;; esac ;;
+esac
 
 [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] ||
     fail 'Only Linux x86-64 is supported; use the manual container guide on other systems.'

@@ -1,6 +1,6 @@
 //! Linear setup: prerequisites → Jira → forges → AI → runtime → authorization.
 use crate::{
-    cli::{Cli, jira_cloud_url},
+    cli::{Cli, JiraArgs, jira_cloud_url, semantic_field},
     discovery::{self, BoardTeams, Catalog, GetJson, JiraClient, Metadata},
     install::{self, Channel, Installer, Paths},
     prompt::{Back, Cancelled, Choice, OpenMenu, Prompts, TerminalPrompts, clean},
@@ -22,6 +22,8 @@ use std::{
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
+
+mod jira_args;
 
 /// Scriptable, read-only discovery. Recents never imply a complete inventory.
 pub trait Discovery {
@@ -1188,6 +1190,7 @@ pub struct Wizard {
     pub host_port: u16,
     pub channel: Channel,
     cli_url: Option<String>,
+    jira_args: JiraArgs,
     nightly_requested: bool,
     identities: BTreeMap<String, String>,
     ai_test_status: &'static str,
@@ -1206,6 +1209,7 @@ impl Wizard {
                 Channel::Stable
             },
             cli_url: cli.jira_cloud_url,
+            jira_args: cli.jira,
             nightly_requested: cli.nightly,
             identities: BTreeMap::new(),
             ai_test_status: "not run (optional)",
@@ -1253,7 +1257,11 @@ impl Wizard {
         cancel: &CancellationToken,
     ) -> Result<()> {
         p.heading("Jira Cloud");
-        if !p.confirm("Configure Jira Cloud?", true).await? && self.remove_jira(p).await? {
+        let mut args = std::mem::take(&mut self.jira_args);
+        if !args.any()
+            && !p.confirm("Configure Jira Cloud?", true).await?
+            && self.remove_jira(p).await?
+        {
             return Ok(());
         }
         let mut j = self.config.jira.clone().unwrap_or_else(|| JiraConfig {
@@ -1271,6 +1279,23 @@ impl Wizard {
             defaults: PurposeDefaults::default(),
             project_overrides: BTreeMap::new(),
         });
+        if args.any() && self.config.jira.is_some() {
+            p.say("Command-line Jira settings propose these changes to the existing configuration; unspecified settings are preserved:");
+            for line in jira_args::changes(&args, &j) {
+                p.say(&line);
+            }
+            if !p
+                .confirm(
+                    "Apply supplied Jira settings to the pending configuration?",
+                    false,
+                )
+                .await?
+            {
+                args = JiraArgs::default();
+            }
+        }
+        let review_supplied = args.any();
+        let mut has_pattern = self.config.jira.is_some();
         let mut saved = self
             .config
             .jira
@@ -1278,7 +1303,13 @@ impl Wizard {
             .map(|j| (j.base_url.clone(), j.token.clone()));
         let mut url_default = self.cli_url.clone().unwrap_or_else(|| j.base_url.clone());
         loop {
-            j.base_url = text(p, "Jira Cloud tenant URL:", &url_default, |s| jira_cloud_url(s).is_ok(), "Use an HTTPS tenant root such as https://your-team.atlassian.net (no credentials, path, query or fragment).").await?;
+            let complete_team_command = args.complete();
+            j.base_url = if let Some(url) = &args.url {
+                p.say(&format!("Jira Cloud tenant URL: {url} (supplied)"));
+                url.clone()
+            } else {
+                text(p, "Jira Cloud tenant URL:", &url_default, |s| jira_cloud_url(s).is_ok(), "Use an HTTPS tenant root such as https://your-team.atlassian.net (no credentials, path, query or fragment).").await?
+            };
             j.base_url = jira_cloud_url(&j.base_url).map_err(anyhow::Error::msg)?;
             url_default.clone_from(&j.base_url);
             j.email = text(
@@ -1300,8 +1331,19 @@ impl Wizard {
             )
             .await?;
             saved = Some((j.base_url.clone(), j.token.clone()));
-            p.say("Verifying Jira identity and loading recent projects (non-exhaustive)…");
-            let catalog = match cancellable(cancel, d.catalog(&j)).await {
+            p.say("Verifying Jira identity (recent projects are non-exhaustive)…");
+            let catalog_result = if args.projects.is_some() {
+                cancellable(cancel, async {
+                    Ok(Catalog {
+                        identity: d.identity(&j).await?,
+                        ..Catalog::default()
+                    })
+                })
+                .await
+            } else {
+                cancellable(cancel, d.catalog(&j)).await
+            };
+            let catalog = match catalog_result {
                 Ok(catalog) => catalog,
                 Err(error) if error.is::<Cancelled>() => return Err(error),
                 Err(error) => {
@@ -1316,7 +1358,10 @@ impl Wizard {
                             identity,
                             ..Catalog::default()
                         },
-                        Connected::Change => continue,
+                        Connected::Change => {
+                            args = JiraArgs::default();
+                            continue;
+                        }
                         Connected::Skip => {
                             if self.remove_jira(p).await? {
                                 return Ok(());
@@ -1330,34 +1375,49 @@ impl Wizard {
                 "Verified identity: {}. Setup reads do not prove complete runtime API permissions.",
                 catalog.identity
             ));
-            match select_projects(p, d, cancel, &mut j, &self.config, catalog.projects).await? {
-                Connected::Ready(()) => {}
-                Connected::Change => continue,
-                Connected::Skip => {
-                    if self.remove_jira(p).await? {
-                        return Ok(());
+            if !jira_args::projects(p, d, cancel, &mut j, &self.config, &mut args).await? {
+                match select_projects(p, d, cancel, &mut j, &self.config, catalog.projects).await? {
+                    Connected::Ready(()) => {}
+                    Connected::Change => {
+                        args = JiraArgs::default();
+                        continue;
                     }
-                    continue;
+                    Connected::Skip => {
+                        if self.remove_jira(p).await? {
+                            return Ok(());
+                        }
+                        continue;
+                    }
                 }
             }
-            match select_board(p, d, cancel, &mut j).await? {
-                Connected::Ready(()) => {}
-                Connected::Change => continue,
-                Connected::Skip => {
-                    if self.remove_jira(p).await? {
-                        return Ok(());
+            if !jira_args::board(p, d, cancel, &mut j, &mut args).await? {
+                match select_board(p, d, cancel, &mut j).await? {
+                    Connected::Ready(()) => {}
+                    Connected::Change => {
+                        args = JiraArgs::default();
+                        continue;
                     }
-                    continue;
+                    Connected::Skip => {
+                        if self.remove_jira(p).await? {
+                            return Ok(());
+                        }
+                        continue;
+                    }
                 }
             }
-            match select_groups(p, d, cancel, &mut j).await? {
-                Connected::Ready(()) => {}
-                Connected::Change => continue,
-                Connected::Skip => {
-                    if self.remove_jira(p).await? {
-                        return Ok(());
+            if !jira_args::groups(p, d, cancel, &mut j, &mut args).await? {
+                match select_groups(p, d, cancel, &mut j).await? {
+                    Connected::Ready(()) => {}
+                    Connected::Change => {
+                        args = JiraArgs::default();
+                        continue;
                     }
-                    continue;
+                    Connected::Skip => {
+                        if self.remove_jira(p).await? {
+                            return Ok(());
+                        }
+                        continue;
+                    }
                 }
             }
             p.say("Discovering semantic fields after project/board/group selection…");
@@ -1372,7 +1432,10 @@ impl Wizard {
             .await?
             {
                 Connected::Ready(settings) => settings,
-                Connected::Change => continue,
+                Connected::Change => {
+                    args = JiraArgs::default();
+                    continue;
+                }
                 Connected::Skip => {
                     if self.remove_jira(p).await? {
                         return Ok(());
@@ -1380,22 +1443,24 @@ impl Wizard {
                     continue;
                 }
             };
-            let fields = team_fields(&settings);
-            // Always ask, including a singleton: the semantic selector is explicit.
-            let field = p
-                .select(
-                    "Team field (semantic name):",
-                    &fields,
-                    index(&fields, &j.team_field_name),
-                )
-                .await?;
-            j.team_field_name = fields
-                .get(field)
-                .context("invalid team field selection")?
-                .id
-                .clone();
+            let mut fields = team_fields(&settings);
+            if !jira_args::field(p, d, cancel, &mut j, &mut fields, &mut args).await? {
+                // Without a supplied verified name, explicitly ask even for a singleton.
+                let field = p
+                    .select(
+                        "Team field (semantic name):",
+                        &fields,
+                        index(&fields, &j.team_field_name),
+                    )
+                    .await?;
+                j.team_field_name = fields
+                    .get(field)
+                    .context("invalid team field selection")?
+                    .id
+                    .clone();
+            }
             p.say("Discovering team options, scoped metadata and active/future sprints…");
-            let metadata = match connect(p, cancel, Some(&j), || async {
+            let mut metadata = match connect(p, cancel, Some(&j), || async {
                 let m = d.metadata(&j).await?;
                 ensure!(
                     m.types.iter().any(|t| !t.teams.is_empty()),
@@ -1406,7 +1471,10 @@ impl Wizard {
             .await?
             {
                 Connected::Ready(m) => m,
-                Connected::Change => continue,
+                Connected::Change => {
+                    args = JiraArgs::default();
+                    continue;
+                }
                 Connected::Skip => {
                     if self.remove_jira(p).await? {
                         return Ok(());
@@ -1415,14 +1483,19 @@ impl Wizard {
                     }
                 }
             };
-            match select_team(p, d, cancel, &mut j, &metadata).await? {
-                Connected::Ready(()) => {}
-                Connected::Change => continue,
-                Connected::Skip => {
-                    if self.remove_jira(p).await? {
-                        return Ok(());
+            if !jira_args::team(p, d, cancel, &mut j, &mut metadata, &mut args).await? {
+                match select_team(p, d, cancel, &mut j, &metadata).await? {
+                    Connected::Ready(()) => {}
+                    Connected::Change => {
+                        args = JiraArgs::default();
+                        continue;
                     }
-                    continue;
+                    Connected::Skip => {
+                        if self.remove_jira(p).await? {
+                            return Ok(());
+                        }
+                        continue;
+                    }
                 }
             }
             for t in &metadata.types {
@@ -1434,7 +1507,7 @@ impl Wizard {
                 p.say(&format!("Selectable sprint: {} — {}", s.state, s.name));
             }
             p.say("The current-sprint pattern is a bounded Rust regex search: case-sensitive unless (?i), optional anchors, no percent-token substitutions.");
-            let default_pattern = if self.config.jira.is_some() {
+            let default_pattern = if has_pattern {
                 j.sprint_name_pattern.as_str().to_owned()
             } else {
                 let team = regex::escape(&j.team);
@@ -1459,8 +1532,12 @@ impl Wizard {
                 }
             };
             loop {
-                let pattern = text(p, "Regular expression to identify your sprints:", &default_pattern, |s| SprintPattern::new(s).is_ok(), "Enter a bounded Rust regex search; case-sensitive unless (?i). Anchors are optional; no percent tokens.").await?;
-                let pattern = SprintPattern::new(&pattern)?;
+                let pattern = if let Some(pattern) = &args.sprint_name_pattern {
+                    pattern.clone()
+                } else {
+                    let pattern = text(p, "Regular expression to identify your sprints:", &default_pattern, |s| SprintPattern::new(s).is_ok(), "Enter a bounded Rust regex search; case-sensitive unless (?i). Anchors are optional; no percent tokens.").await?;
+                    SprintPattern::new(&pattern)?
+                };
                 let matching = metadata
                     .sprints
                     .iter()
@@ -1473,16 +1550,31 @@ impl Wizard {
                         .confirm("Continue with no unique current-sprint default?", false)
                         .await?
                     {
+                        args.sprint_name_pattern = None;
                         continue;
                     }
                 }
                 j.sprint_name_pattern = pattern;
+                has_pattern = true;
                 break;
             }
-            if p.confirm("Configure advanced issue-type/workflow suggestions?", false)
-                .await?
+            if !complete_team_command
+                && p.confirm("Configure advanced issue-type/workflow suggestions?", false)
+                    .await?
             {
                 advanced_jira(p, &mut j, &metadata).await?;
+            }
+            if review_supplied {
+                p.heading("Review Jira settings");
+                for line in jira_args::summary(&j) {
+                    p.say(&clean(&line));
+                }
+                if p.confirm("Edit Jira settings before continuing?", false)
+                    .await?
+                {
+                    args = JiraArgs::default();
+                    continue;
+                }
             }
             let mut candidate = self.config.clone();
             for f in &mut candidate.forges {
@@ -1898,22 +1990,7 @@ impl Wizard {
             ),
         ];
         if let Some(j) = &self.config.jira {
-            lines.push(format!(
-                "Jira: {} · projects {} (primary first) · board {} · team {}",
-                j.base_url,
-                j.projects.join(", "),
-                j.board_id,
-                j.team
-            ));
-            lines.push(format!(
-                "Assignee groups: {} · team field: {}",
-                j.assignee_groups.join(", "),
-                j.team_field_name
-            ));
-            lines.push(format!(
-                "Regular expression to identify your sprints: {}",
-                j.sprint_name_pattern.as_str()
-            ));
+            lines.extend(jira_args::summary(j));
         } else {
             lines.push("Jira: disabled".into());
         }
@@ -1964,14 +2041,6 @@ impl Wizard {
     }
 }
 
-fn semantic_field(s: &str) -> bool {
-    !s.trim().is_empty()
-        && !s.to_lowercase().starts_with("customfield")
-        && !s.bytes().all(|b| b.is_ascii_digit())
-        && !s
-            .strip_prefix("field")
-            .is_some_and(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
-}
 fn team_fields(catalog: &Catalog) -> Vec<Choice> {
     // Duplicate semantic names cannot be selected safely by the runtime.
     let mut counts = BTreeMap::<&str, usize>::new();

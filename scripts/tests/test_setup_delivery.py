@@ -92,12 +92,12 @@ sys.exit(int(os.environ['MOCK_EXIT']))
     def manifest(self, checksum):
         (self.fixtures / 'SHA256SUMS').write_text(f'{checksum}  {ASSET}\n')
 
-    def launch(self, *arguments, terminal=True):
+    def launch(self, *arguments, terminal=True, shell='sh', piped=False):
         if not terminal:
             return subprocess.run(['sh', str(LAUNCHER), *arguments],
                                   env=self.environment, stdin=subprocess.DEVNULL,
                                   capture_output=True, text=True, timeout=10)
-        process, master = self.start(*arguments)
+        process, master = self.start(*arguments, shell=shell, piped=piped)
         self.addCleanup(os.close, master)
         process.wait(timeout=10)
         output = bytearray()
@@ -114,7 +114,7 @@ sys.exit(int(os.environ['MOCK_EXIT']))
         return subprocess.CompletedProcess(process.args, process.returncode,
                                            output.decode(), '')
 
-    def start(self, *arguments):
+    def start(self, *arguments, shell='sh', piped=False):
         master, slave = pty.openpty()
 
         def controlling_terminal():
@@ -125,10 +125,14 @@ sys.exit(int(os.environ['MOCK_EXIT']))
         # must reopen /dev/tty rather than inherit its consumed script input.
         try:
             process = subprocess.Popen(
-                ['sh', str(LAUNCHER), *arguments], env=self.environment,
-                stdin=subprocess.DEVNULL, stdout=slave, stderr=slave,
+                ([shell, '-s', '--', *arguments] if piped else [shell, str(LAUNCHER), *arguments]),
+                env=self.environment,
+                stdin=subprocess.PIPE if piped else subprocess.DEVNULL, stdout=slave, stderr=slave,
                 preexec_fn=controlling_terminal,
             )
+            if piped:
+                process.stdin.write(LAUNCHER.read_bytes())
+                process.stdin.close()
         finally:
             os.close(slave)
         self.addCleanup(lambda: process.poll() is None and process.kill())
@@ -161,6 +165,55 @@ sys.exit(int(os.environ['MOCK_EXIT']))
         self.assertEqual(json.loads(self.result.read_text())['args'],
                          ['--nightly', '--jira-cloud-url=https://example.atlassian.net'])
         self.assert_cleaned()
+
+    def test_all_team_jira_flags_forward_exact_argv_in_both_forms(self):
+        flags = [
+            ('--jira-url', 'https://example.atlassian.net'),
+            ('--jira-projects', 'TWO, ONE,TWO'),
+            ('--jira-board-id', '42'),
+            ('--jira-groups', 'engineering,platform team'),
+            ('--jira-team-field', 'Assigned Team'),
+            ('--jira-team', 'Platform Team'),
+            ('--jira-sprint-name-pattern', r'(?i)^Platform \d+ $'),
+        ]
+        for equals in [False, True]:
+            with self.subTest(equals=equals):
+                arguments = ([f'{flag}={value}' for flag, value in flags] if equals
+                             else [arg for pair in flags for arg in pair])
+                result = self.launch(*arguments)
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertEqual(json.loads(self.result.read_text())['args'], arguments)
+                self.assert_cleaned()
+
+    def test_bash_stdin_launcher_restores_tty_and_preserves_team_arguments(self):
+        marker = self.directory / 'injected'
+        arguments = ['--jira-url=https://example.atlassian.net', '--jira-projects=DEV,OPS',
+                     '--jira-board-id=42', '--jira-groups=engineering,reviewers',
+                     '--jira-team-field=AssignedTeam', '--jira-team', 'Platform Team',
+                     '--jira-sprint-name-pattern', f'^Team $(touch "{marker}")']
+        result = self.launch(*arguments, shell='bash', piped=True)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        executed = json.loads(self.result.read_text())
+        self.assertEqual(executed['args'], arguments)
+        self.assertTrue(executed['tty'])
+        self.assertFalse(marker.exists())
+        self.assert_cleaned()
+
+    def test_team_jira_options_reject_missing_empty_repeated_and_conflicting_flags(self):
+        flags = ['--jira-url', '--jira-projects', '--jira-board-id', '--jira-groups',
+                 '--jira-team-field', '--jira-team', '--jira-sprint-name-pattern']
+        for flag in flags:
+            for arguments in [(flag,), (flag + '=',), (flag, '--nightly'),
+                              (flag, ''), (flag + '=value', flag, 'value')]:
+                with self.subTest(arguments=arguments):
+                    result = self.launch(*arguments, terminal=False)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotIn('value', result.stderr.replace('nonempty value', ''))
+        for arguments in [('--jira-url=a', '--jira-cloud-url=b'),
+                          ('--jira-cloud-url=a', '--jira-url=b')]:
+            self.assertNotEqual(self.launch(*arguments, terminal=False).returncode, 0)
+        self.assertFalse(self.requests.exists())
+        self.assertFalse(self.result.exists())
 
     def test_argument_is_never_evaluated_by_shell(self):
         marker = self.directory / 'injected'

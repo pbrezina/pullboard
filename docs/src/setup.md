@@ -77,7 +77,74 @@ Delete the downloaded files afterward.
 A versioned wizard download does not pin the service image: Stable tracks `latest`.
 No fixed download-size claim is made; each build logs its actual sizes.
 
-### Share a Jira URL prefill, not credentials
+### Share team Jira settings, not credentials
+
+A team command can supply the shared Jira settings while each user enters their
+own email and masked token. Replace these example names and IDs with your tenant's
+real values:
+
+```sh
+curl --fail --location --proto '=https' --proto-redir '=https' \
+  https://github.com/pbrezina/pullboard/releases/latest/download/pullboard-setup.sh | \
+  bash -s -- \
+    --jira-url=https://example.atlassian.net \
+    --jira-projects=DEV,OPS \
+    --jira-board-id=42 \
+    --jira-groups=engineering,reviewers \
+    --jira-team-field=AssignedTeam \
+    --jira-team='Platform Team' \
+    --jira-sprint-name-pattern='^Platform '
+```
+
+The launcher forwards these arguments unchanged to the setup executable; they are
+**setup inputs**, not a second application configuration source. The verified
+settings are eventually saved in the same single YAML file. Both `--flag=value`
+and `--flag value` work in the launcher and directly in `pullboard-setup`.
+
+| Parameter | Meaning and verification |
+| --- | --- |
+| `--jira-url URL` | HTTPS Jira Cloud tenant root only; no credentials, port, API/gateway path, query or fragment. Skips the URL prompt. |
+| `--jira-projects KEY1,KEY2` | 1..100 unique project keys, verified individually for the current account. The first key is the primary/header project; input order is preserved. |
+| `--jira-board-id ID` | Positive numeric board ID, verified directly through Jira. |
+| `--jira-groups GROUP1,GROUP2` | At least one exact assignee-group name; verify every name and complete membership-read access. Never fall back to all users. |
+| `--jira-team-field NAME` | Exact unique supported semantic team field name, not a raw field ID such as `customfield_123`. Included because the interactive wizard explicitly asks for a field even when only one is available. |
+| `--jira-team NAME` | Exact team option name, verified against selected-project/type create metadata. It need not be observed in active-sprint board issues. |
+| `--jira-sprint-name-pattern REGEX` | Bounded Rust regex search, at most 4096 UTF-8 bytes. Quote regexes to prevent shell expansion; case-sensitive unless inline flags change it. |
+
+Every flag is optional individually: provided settings bypass their pickers, not
+verification; omitted settings remain interactive with existing values as defaults
+on reruns. Supplying any of these flags enters the Jira section without asking
+whether to enable it. Lists use commas as separators, trim surrounding whitespace,
+reject empty entries and deduplicate in first-occurrence order. Names containing a
+literal comma cannot be represented by these list flags; select those interactively.
+Repeat neither list nor scalar flags; repeated flags and malformed values are
+rejected. Email, token, issue-type policies and per-project workflow overrides have
+no command-line parameters. There are no credential environment inputs.
+
+Explicit projects, board, groups and team do not require recent-item, own-group,
+board-issue team discovery or broad inventory scans. They still require identity,
+semantic fields, scoped create metadata and active/future sprint verification.
+Failed supplied-setting verification offers **Retry / Correct this setting
+interactively / Cancel setup**; an argument rejected for correction is never
+silently reapplied. Network/metadata failures retain the normal connection recovery
+flow. A regex with zero or multiple active matches still requires explicit
+acknowledgement or correction; it never hides selectable sprints.
+
+On an existing configuration, setup displays old → proposed supplied values and
+asks before applying them. Unspecified settings remain unchanged unless edited in
+their normal prompts. Project removal separately acknowledges orphaned overrides
+and affected forge default-project links. Changing tenants **never** authorizes
+sending a saved token to the new destination: separate credential consent or token
+reentry is required before any Jira request.
+
+A complete team command needs no individual Jira setting prompts after credentials
+except warnings that require acknowledgement. It leaves advanced policies at their
+defaults (or preserves saved ones). A token-free Jira review offers interactive
+editing before continuing; the final installation review still applies. Forge,
+AI, runtime, Test-mode and installation questions remain interactive and unchanged.
+This is not unattended setup, and setup never writes upstream.
+
+### Legacy editable URL prefill
 
 For example, a team can share this **nonsecret** tenant hint:
 
@@ -94,6 +161,8 @@ hardcoded tenant. On edit, the existing URL is used unless deliberately changed.
 Changing a destination does not authorize sending an existing token there: explicit
 credential confirmation/reentry is required first. Never put tokens in command-line
 arguments, environment variables, shell history, screenshots or shared commands.
+This legacy flag keeps its editable-prefill behavior; it is not an alias for
+`--jira-url`. Supplying both URL flags is an error.
 
 ## Accounts and permissions
 
@@ -171,7 +240,8 @@ Choose the intended primary project; it is saved **first** and controls the head
 A board remains required for the complete active/future sprint inventory and board
 estimation configuration; a sprint-name pattern does not replace board selection.
 
-Setup explicitly asks **Team field (semantic name):** even when only one field is
+Without a supplied verified `--jira-team-field`, setup explicitly asks
+**Team field (semantic name):** even when only one field is
 available. The **Team** picker initially offers verified option values observed on
 the selected board's issues across **all returned active sprints**. It does not
 scan future sprints or history, or filter this discovery by the sprint-name regex.

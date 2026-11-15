@@ -45,7 +45,8 @@ Yes to simulate Jira submissions. Setup itself never writes upstream. Existing
 mode settings are preserved on edit.
 
 See the [setup guide](docs/src/setup.md) for prerequisites, token permissions,
-`--nightly`, sharing a `--jira-cloud-url` prefill, protected backups and recovery.
+`--nightly`, [sharing team Jira parameters](docs/src/setup.md#share-team-jira-settings-not-credentials),
+the legacy editable `--jira-cloud-url` prefill, protected backups and recovery.
 The launcher/binary are not kept in `~/.local/bin`; rerun setup to edit settings.
 
 ### Manual YAML and container option

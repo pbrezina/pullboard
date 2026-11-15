@@ -157,6 +157,7 @@ struct MockDiscovery {
     board_failures: RefCell<VecDeque<bool>>,
     manual_projects: BTreeMap<String, Vec<Choice>>,
     manual_boards: BTreeMap<String, Choice>,
+    manual_board_failures: RefCell<VecDeque<bool>>,
     all_projects: Vec<Choice>,
     project_boards: Vec<Choice>,
     broad_failure: bool,
@@ -172,6 +173,8 @@ struct MockDiscovery {
     ai_fails: bool,
     ambiguous_sprints: bool,
     metadata_teams: Option<Vec<String>>,
+    field_inventories: RefCell<VecDeque<Vec<Choice>>>,
+    team_inventories: RefCell<VecDeque<Vec<String>>>,
     board_teams: Option<Vec<String>>,
     team_failures: RefCell<VecDeque<bool>>,
 }
@@ -242,6 +245,14 @@ impl Discovery for MockDiscovery {
     }
     async fn board(&self, _: &JiraConfig, input: &str) -> Result<Choice> {
         self.calls.borrow_mut().push(format!("board:{input}"));
+        if self
+            .manual_board_failures
+            .borrow_mut()
+            .pop_front()
+            .unwrap_or(false)
+        {
+            bail!("board lookup returned HTTP 503");
+        }
         if let Some(message) = self.manual_error {
             bail!("{message}");
         }
@@ -265,7 +276,11 @@ impl Discovery for MockDiscovery {
         self.calls.borrow_mut().push("settings".into());
         Ok(Catalog {
             groups: vec![Choice::new("developers", "developers")],
-            fields: vec![Choice::new("AssignedTeam", "AssignedTeam")],
+            fields: self
+                .field_inventories
+                .borrow_mut()
+                .pop_front()
+                .unwrap_or_else(|| vec![Choice::new("AssignedTeam", "AssignedTeam")]),
             ..Default::default()
         })
     }
@@ -295,6 +310,12 @@ impl Discovery for MockDiscovery {
     }
     async fn metadata(&self, j: &JiraConfig) -> Result<Metadata> {
         self.calls.borrow_mut().push("metadata".into());
+        let teams = self
+            .team_inventories
+            .borrow_mut()
+            .pop_front()
+            .or_else(|| self.metadata_teams.clone())
+            .unwrap_or_else(|| vec!["Team A".into()]);
         let mut sprints = vec![
             Sprint {
                 id: "1".into(),
@@ -324,15 +345,10 @@ impl Discovery for MockDiscovery {
                 .map(|project| TypeMetadata {
                     project: project.clone(),
                     name: "Task".into(),
-                    teams: self
-                        .metadata_teams
-                        .clone()
-                        .unwrap_or_else(|| vec!["Team A".into()]),
-                    team_options: self
-                        .metadata_teams
-                        .clone()
-                        .unwrap_or_else(|| vec!["Team A".into()])
-                        .into_iter()
+                    teams: teams.clone(),
+                    team_options: teams
+                        .iter()
+                        .cloned()
                         .enumerate()
                         .map(|(i, value)| TeamOption {
                             id: (i + 100).to_string(),
@@ -847,6 +863,516 @@ async fn jira_cli_prefill_never_sends_saved_token_without_explicit_destination_c
     assert_eq!(
         a.config.jira.as_ref().unwrap().base_url,
         "https://first.atlassian.net"
+    );
+}
+
+fn team_cli() -> Vec<String> {
+    [
+        "setup",
+        "--jira-url=https://first.atlassian.net",
+        "--jira-projects=TWO,ONE,TWO",
+        "--jira-board-id=7",
+        "--jira-groups=developers",
+        "--jira-team-field=AssignedTeam",
+        "--jira-team=Team A",
+        "--jira-sprint-name-pattern=^Team A",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
+fn team_app(flag: &str, value: &str) -> Wizard {
+    let mut argv = team_cli();
+    if !flag.is_empty() {
+        let arg = argv
+            .iter_mut()
+            .find(|arg| arg.starts_with(&format!("{flag}=")))
+            .unwrap();
+        *arg = format!("{flag}={value}");
+    }
+    Wizard::new(Cli::try_parse_from(argv).unwrap())
+}
+
+fn team_discovery() -> MockDiscovery {
+    MockDiscovery {
+        manual_projects: BTreeMap::from([
+            ("ONE".into(), vec![Choice::new("ONE", "One")]),
+            ("TWO".into(), vec![Choice::new("TWO", "Two")]),
+        ]),
+        manual_boards: BTreeMap::from([("7".into(), Choice::new("7", "Board seven"))]),
+        manual_groups: BTreeMap::from([(
+            "developers".into(),
+            Choice::new("developers", "Developers"),
+        )]),
+        ..Default::default()
+    }
+}
+
+fn team_credentials() -> Vec<Step> {
+    vec![
+        Text("Atlassian account email", "human@example.invalid"),
+        Password(false, "new-jira-secret"),
+    ]
+}
+
+#[tokio::test]
+async fn complete_team_command_skips_supplied_prompts_and_uses_only_targeted_verification() {
+    let mut a = team_app("", "");
+    let d = team_discovery();
+    let mut steps = team_credentials();
+    steps.push(Confirm("Edit Jira settings", false));
+    steps.extend(disabled_tail());
+    let mut p = Script::new(steps);
+    configured(&mut a, &mut p, &d).await;
+    let j = a.config.jira.as_ref().unwrap();
+    assert_eq!(j.projects, ["TWO", "ONE"]);
+    assert_eq!(j.assignee_groups, ["developers"]);
+    assert_eq!(j.team, "Team A");
+    assert_eq!(j.team_field_name, "AssignedTeam");
+    assert_eq!(j.board_id, 7);
+    assert_eq!(j.sprint_name_pattern.as_str(), "^Team A");
+    assert_eq!(
+        *d.calls.borrow(),
+        [
+            "identity",
+            "project:TWO",
+            "project:ONE",
+            "board:7",
+            "group:developers",
+            "settings",
+            "metadata"
+        ]
+    );
+    assert!(!p.transcript.join("\n").contains("new-jira-secret"));
+    assert!(
+        p.transcript
+            .join("\n")
+            .contains("projects TWO, ONE (primary first)")
+    );
+}
+
+#[tokio::test]
+async fn partial_team_command_leaves_missing_settings_interactive() {
+    let mut a = Wizard::new(Cli::try_parse_from(["setup", "--jira-team=Team A"]).unwrap());
+    let mut steps = jira_new();
+    steps.remove(0); // Supplied Jira settings explicitly enable the Jira section.
+    steps.retain(|step| !matches!(step, Enter("Team:")));
+    steps.push(Confirm("Edit Jira settings", false));
+    steps.extend(disabled_tail());
+    let mut p = Script::new(steps);
+    let d = MockDiscovery::default();
+    configured(&mut a, &mut p, &d).await;
+    assert!(
+        !d.calls
+            .borrow()
+            .iter()
+            .any(|call| call.starts_with("board_teams:"))
+    );
+}
+
+#[tokio::test]
+async fn supplied_board_can_retry_and_rejected_groups_can_be_corrected_without_reapplication() {
+    let mut a = team_app("--jira-groups", "missing");
+    let d = MockDiscovery {
+        manual_board_failures: RefCell::new([true, false].into()),
+        ..team_discovery()
+    };
+    let mut steps = team_credentials();
+    steps.extend([
+        Select("Supplied Jira setting failed", 0), // Retry transient board failure.
+        Select("Supplied Jira setting failed", 1), // Correct unknown group.
+        Enter("Assignee groups"),
+        Confirm("Edit Jira settings", false),
+    ]);
+    steps.extend(disabled_tail());
+    let mut p = Script::new(steps);
+    configured(&mut a, &mut p, &d).await;
+    assert_eq!(
+        a.config.jira.as_ref().unwrap().assignee_groups,
+        ["developers"]
+    );
+    assert_eq!(
+        d.calls
+            .borrow()
+            .iter()
+            .filter(|call| *call == "board:7")
+            .count(),
+        2
+    );
+    assert_eq!(
+        d.calls
+            .borrow()
+            .iter()
+            .filter(|call| *call == "group:missing")
+            .count(),
+        1
+    );
+    assert!(!d.calls.borrow().iter().any(|call| call == "all_groups"));
+}
+
+#[tokio::test]
+async fn unverified_supplied_settings_never_commit_and_can_cancel() {
+    for (flag, value) in [
+        ("--jira-projects", "MISSING"),
+        ("--jira-board-id", "99"),
+        ("--jira-groups", "developers,missing"),
+        ("--jira-team-field", "MissingField"),
+        ("--jira-team", "Missing Team"),
+    ] {
+        let mut a = team_app(flag, value);
+        let d = team_discovery();
+        let mut steps = team_credentials();
+        steps.push(Select("Supplied Jira setting failed", 2));
+        let mut p = Script::new(steps);
+        assert!(
+            a.configure(&mut p, &d, &CancellationToken::new())
+                .await
+                .unwrap_err()
+                .is::<Cancelled>()
+        );
+        p.done();
+        assert!(a.config.jira.is_none(), "{flag}");
+        assert!(!d.calls.borrow().iter().any(|call| call == "all_groups"
+            || call == "all_projects"
+            || call.starts_with("project_boards:")));
+    }
+}
+
+#[tokio::test]
+async fn supplied_fields_and_teams_retry_discovery_instead_of_rechecking_a_frozen_snapshot() {
+    let mut a = team_app("", "");
+    let d = MockDiscovery {
+        field_inventories: RefCell::new(
+            [
+                vec![
+                    Choice::new("AssignedTeam", "Ambiguous 1"),
+                    Choice::new("AssignedTeam", "Ambiguous 2"),
+                    Choice::new("OtherTeam", "Other field"),
+                ],
+                vec![Choice::new("AssignedTeam", "AssignedTeam")],
+            ]
+            .into(),
+        ),
+        team_inventories: RefCell::new([vec!["Other Team".into()], vec!["Team A".into()]].into()),
+        ..team_discovery()
+    };
+    let mut steps = team_credentials();
+    steps.extend([
+        Select("Supplied Jira setting failed", 0),
+        Select("Supplied Jira setting failed", 0),
+        Confirm("Edit Jira settings", false),
+    ]);
+    steps.extend(disabled_tail());
+    let mut p = Script::new(steps);
+    configured(&mut a, &mut p, &d).await;
+    assert_eq!(
+        d.calls
+            .borrow()
+            .iter()
+            .filter(|call| *call == "settings")
+            .count(),
+        2
+    );
+    assert_eq!(
+        d.calls
+            .borrow()
+            .iter()
+            .filter(|call| *call == "metadata")
+            .count(),
+        2
+    );
+    assert_eq!(a.config.jira.as_ref().unwrap().team, "Team A");
+}
+
+#[tokio::test]
+async fn every_supplied_selector_allows_interactive_correction_without_silent_substitution() {
+    for (flag, value, correction) in [
+        (
+            "--jira-projects",
+            "MISSING",
+            vec![
+                Select("Project actions", 1),
+                Text("Project key", "ONE"),
+                Select("Project actions", 4),
+            ],
+        ),
+        ("--jira-board-id", "99", vec![Enter("Jira board")]),
+        (
+            "--jira-team-field",
+            "MissingField",
+            vec![Enter("Team field")],
+        ),
+        ("--jira-team", "Missing Team", vec![Enter("Team:")]),
+    ] {
+        let mut a = team_app(flag, value);
+        let d = team_discovery();
+        let mut steps = team_credentials();
+        steps.push(Select("Supplied Jira setting failed", 1));
+        steps.extend(correction);
+        steps.push(Confirm("Edit Jira settings", false));
+        steps.extend(disabled_tail());
+        let mut p = Script::new(steps);
+        configured(&mut a, &mut p, &d).await;
+        let j = a.config.jira.as_ref().unwrap();
+        assert_eq!(j.board_id, 7);
+        assert_eq!(j.team_field_name, "AssignedTeam");
+        assert_eq!(j.team, "Team A");
+        if flag == "--jira-projects" {
+            assert_eq!(j.projects, ["ONE"]);
+        }
+    }
+}
+
+#[tokio::test]
+async fn supplied_lookup_mismatches_fail_closed() {
+    for mismatched in ["project", "board", "group"] {
+        let mut a = team_app("", "");
+        let mut d = team_discovery();
+        match mismatched {
+            "project" => {
+                d.manual_projects
+                    .insert("TWO".into(), vec![Choice::new("OTHER", "Wrong project")]);
+            }
+            "board" => {
+                d.manual_boards
+                    .insert("7".into(), Choice::new("99", "Wrong board"));
+            }
+            _ => {
+                d.manual_groups
+                    .insert("developers".into(), Choice::new("other", "Wrong group"));
+            }
+        }
+        let mut steps = team_credentials();
+        steps.push(Cancel("Supplied Jira setting failed"));
+        let mut p = Script::new(steps);
+        assert!(
+            a.configure(&mut p, &d, &CancellationToken::new())
+                .await
+                .unwrap_err()
+                .is::<Cancelled>()
+        );
+        p.done();
+        assert!(a.config.jira.is_none());
+    }
+}
+
+#[tokio::test]
+async fn supplied_regex_with_no_unique_active_match_requires_acknowledgement_or_interactive_correction()
+ {
+    for (pattern, ambiguous, accept) in [
+        ("^None", false, true),
+        ("^Team A", true, true),
+        ("^None", false, false),
+    ] {
+        let mut a = team_app("--jira-sprint-name-pattern", pattern);
+        let d = MockDiscovery {
+            ambiguous_sprints: ambiguous,
+            ..team_discovery()
+        };
+        let mut steps = team_credentials();
+        steps.push(Confirm("Continue with no unique", accept));
+        if !accept {
+            steps.push(Text(
+                "Regular expression to identify your sprints",
+                "current$",
+            ));
+        }
+        steps.push(Confirm("Edit Jira settings", false));
+        steps.extend(disabled_tail());
+        let mut p = Script::new(steps);
+        configured(&mut a, &mut p, &d).await;
+        assert_eq!(
+            a.config.jira.as_ref().unwrap().sprint_name_pattern.as_str(),
+            if accept { pattern } else { "current$" }
+        );
+        assert!(
+            p.transcript
+                .iter()
+                .any(|line| line.contains("Team A future"))
+        );
+    }
+}
+
+#[tokio::test]
+async fn existing_team_command_requires_consent_before_any_discovery_or_saved_token_destination_change()
+ {
+    for destination_consent in [false, true] {
+        let mut a = team_app("--jira-url", "https://second.atlassian.net");
+        a.config = fixture();
+        let original = a.config.to_yaml().unwrap();
+        let mut steps = if destination_consent {
+            vec![
+                Confirm("Apply supplied Jira", true),
+                Text("Atlassian account email", "<default>"),
+                Password(true, ""),
+                Cancel("Send the saved"),
+            ]
+        } else {
+            vec![Cancel("Apply supplied Jira")]
+        };
+        let d = team_discovery();
+        let mut p = Script::new(std::mem::take(&mut steps));
+        assert!(
+            a.configure(&mut p, &d, &CancellationToken::new())
+                .await
+                .unwrap_err()
+                .is::<Cancelled>()
+        );
+        p.done();
+        assert!(d.calls.borrow().is_empty());
+        assert_eq!(a.config.to_yaml().unwrap(), original);
+        assert!(!p.transcript.join("\n").contains("sentinel-secret"));
+    }
+}
+
+#[tokio::test]
+async fn declining_supplied_existing_update_uses_saved_defaults_instead() {
+    let mut a = team_app("--jira-url", "https://second.atlassian.net");
+    a.config = fixture();
+    a.config.forges.clear();
+    let d = MockDiscovery {
+        projects: vec![Choice::new("ONE", "One"), Choice::new("TWO", "Two")],
+        ..Default::default()
+    };
+    let mut steps = vec![
+        Confirm("Apply supplied Jira", false),
+        Text("Jira Cloud tenant URL", "<default>"),
+        Text("Atlassian account email", "<default>"),
+        Password(true, ""),
+        Enter("Jira projects"),
+        Enter("Primary Jira project"),
+        Enter("Jira board"),
+        Enter("Assignee groups"),
+        Enter("Team field"),
+        Enter("Team:"),
+        Enter("Regular expression"),
+        Confirm("Configure advanced issue", false),
+    ];
+    steps.extend(disabled_tail());
+    let mut p = Script::new(steps);
+    configured(&mut a, &mut p, &d).await;
+    assert_eq!(
+        a.config.jira.as_ref().unwrap().base_url,
+        "https://first.atlassian.net"
+    );
+    assert!(!a.config.read_only_test_mode); // Runtime remains explicitly editable.
+}
+
+#[tokio::test]
+async fn supplied_project_removal_explicitly_cleans_dependents_and_preserves_other_settings() {
+    let mut a = team_app("--jira-projects", "ONE");
+    a.config = fixture();
+    for key in ["ONE", "TWO"] {
+        a.config
+            .jira
+            .as_mut()
+            .unwrap()
+            .project_overrides
+            .insert(key.into(), ProjectOverride::default());
+    }
+    a.config.upstream.max_pages = 31;
+    let d = team_discovery();
+    let mut steps = vec![
+        Confirm("Apply supplied Jira", true),
+        Text("Atlassian account email", "<default>"),
+        Password(true, ""),
+        Confirm("Confirm project removal", true),
+        Confirm("Edit Jira settings", false),
+        Confirm("Configure existing forge", true),
+        Select("Forge provider", 0),
+        Text("Forge URL", "<default>"),
+        Password(true, ""),
+        Confirm("Configure advanced repository", false),
+    ];
+    steps.extend(disabled_tail());
+    let mut p = Script::new(steps);
+    configured(&mut a, &mut p, &d).await;
+    let j = a.config.jira.as_ref().unwrap();
+    assert_eq!(j.projects, ["ONE"]);
+    assert!(j.project_overrides.contains_key("ONE"));
+    assert!(!j.project_overrides.contains_key("TWO"));
+    assert!(a.config.forges[0].default_project.is_none());
+    assert_eq!(a.config.forges[0].include_repositories, ["org/*"]);
+    assert_eq!(a.config.refresh_interval_seconds, 1234);
+    assert_eq!(a.config.upstream.max_pages, 31);
+    assert!(
+        p.transcript
+            .iter()
+            .any(|line| line.contains("orphaned project overrides: TWO"))
+    );
+}
+
+#[tokio::test]
+async fn declining_supplied_project_removal_preserves_saved_projects_and_overrides() {
+    let mut a = team_app("--jira-projects", "ONE");
+    a.config = fixture();
+    a.config.forges.clear();
+    a.config
+        .jira
+        .as_mut()
+        .unwrap()
+        .project_overrides
+        .insert("TWO".into(), ProjectOverride::default());
+    let d = team_discovery();
+    let mut steps = vec![
+        Confirm("Apply supplied Jira", true),
+        Text("Atlassian account email", "<default>"),
+        Password(true, ""),
+        Confirm("Confirm project removal", false),
+        Enter("Jira projects"),
+        Enter("Primary Jira project"),
+        Confirm("Edit Jira settings", false),
+    ];
+    steps.extend(disabled_tail());
+    let mut p = Script::new(steps);
+    configured(&mut a, &mut p, &d).await;
+    let j = a.config.jira.as_ref().unwrap();
+    assert_eq!(j.projects, ["ONE", "TWO"]);
+    assert!(j.project_overrides.contains_key("TWO"));
+}
+
+#[tokio::test]
+async fn supplied_review_can_return_to_editable_wizard_without_reapplying_arguments() {
+    let mut a = team_app("", "");
+    let d = MockDiscovery {
+        projects: vec![Choice::new("TWO", "Two"), Choice::new("ONE", "One")],
+        ..team_discovery()
+    };
+    let mut steps = team_credentials();
+    steps.extend([
+        Confirm("Edit Jira settings", true),
+        Text("Jira Cloud tenant URL", "<default>"),
+        Text("Atlassian account email", "<default>"),
+        Password(true, ""),
+        Enter("Jira projects"),
+        Enter("Primary Jira project"),
+        Enter("Jira board"),
+        Enter("Assignee groups"),
+        Enter("Team field"),
+        Enter("Team:"),
+        Text("Regular expression", "current$"),
+        Confirm("Configure advanced issue", false),
+        Confirm("Edit Jira settings", false),
+    ]);
+    steps.extend(disabled_tail());
+    let mut p = Script::new(steps);
+    configured(&mut a, &mut p, &d).await;
+    assert_eq!(
+        a.config.jira.as_ref().unwrap().sprint_name_pattern.as_str(),
+        "current$"
+    );
+    assert!(p.defaults.contains(&(
+        "Regular expression to identify your sprints:".into(),
+        "^Team A".into()
+    )));
+    assert_eq!(
+        d.calls
+            .borrow()
+            .iter()
+            .filter(|call| *call == "project:TWO")
+            .count(),
+        1
     );
 }
 

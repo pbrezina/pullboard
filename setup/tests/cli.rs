@@ -9,7 +9,18 @@ fn help_and_version_do_not_inspect_or_install() {
     let help = binary().arg("--help").output().unwrap();
     assert!(help.status.success());
     let help = String::from_utf8(help.stdout).unwrap();
-    for flag in ["--jira-cloud-url", "--nightly", "--no-color"] {
+    for flag in [
+        "--jira-cloud-url",
+        "--jira-url",
+        "--jira-projects",
+        "--jira-board-id",
+        "--jira-groups",
+        "--jira-team-field",
+        "--jira-team",
+        "--jira-sprint-name-pattern",
+        "--nightly",
+        "--no-color",
+    ] {
         assert!(help.contains(flag));
     }
     assert!(!help.contains("--token"));
@@ -64,6 +75,22 @@ fn rejected_argument_values_never_echo_accidental_credentials() {
         vec![SECRET.into()],
     ] {
         assert_sanitized_rejection(&args, SECRET);
+    }
+    for flag in [
+        "--jira-url",
+        "--jira-board-id",
+        "--jira-projects",
+        "--jira-groups",
+        "--jira-team-field",
+        "--jira-team",
+        "--jira-sprint-name-pattern",
+    ] {
+        let value = format!("[{SECRET}\n");
+        assert_sanitized_rejection(&[format!("{flag}={value}")], SECRET);
+        assert_sanitized_rejection(&[flag.into(), value], SECRET);
+    }
+    for flag in ["--jira-email", "--jira-token", "--jira-token-file"] {
+        assert_sanitized_rejection(&[format!("{flag}={SECRET}")], SECRET);
     }
 }
 

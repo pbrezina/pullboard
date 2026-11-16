@@ -625,6 +625,7 @@ async fn recent_boards(
     cancel: &CancellationToken,
     j: &JiraConfig,
     items: &mut Vec<Choice>,
+    verified: &mut BTreeSet<String>,
 ) -> Result<()> {
     match cancellable(cancel, d.boards(j)).await {
         Ok(recent) => {
@@ -641,13 +642,22 @@ async fn recent_boards(
             j,
         ),
     }
-    if j.board_id > 0 && !items.iter().any(|item| item.id == j.board_id.to_string()) {
-        match cancellable(cancel, d.board(j, &j.board_id.to_string())).await {
-            Ok(board) => merge_choices(items, vec![board]),
+    for id in &j.board_ids {
+        if verified.contains(&id.to_string()) {
+            continue;
+        }
+        match cancellable(cancel, d.board(j, &id.to_string())).await {
+            Ok(board) if board.id == id.to_string() => {
+                verified.insert(board.id.clone());
+                merge_choices(items, vec![board]);
+            }
+            Ok(_) => {
+                p.say("Saved board lookup returned a different ID; retry or explicitly remove it.")
+            }
             Err(error) if error.is::<Cancelled>() => return Err(error),
             Err(error) => jira_error(
                 p,
-                "Saved board could not be verified; retry or select another board",
+                "Saved board could not be verified; retry or explicitly remove it",
                 &error,
                 j,
             ),
@@ -664,18 +674,14 @@ async fn select_board(
 ) -> Result<Connected<()>> {
     p.say("Recent Jira boards are non-exhaustive. Manual entry is available; broader lookup is restricted to your selected projects, never all tenant boards.");
     let mut items = Vec::new();
-    recent_boards(p, d, cancel, j, &mut items).await?;
+    let mut verified_ids = BTreeSet::new();
+    recent_boards(p, d, cancel, j, &mut items, &mut verified_ids).await?;
     let mut next_action = (!items.is_empty()).then_some(0);
     loop {
-        let verified = items.iter().any(|item| item.id == j.board_id.to_string());
+        let selected = !j.board_ids.is_empty();
         p.say(&format!(
-            "Selected board: {}{}",
-            j.board_id,
-            if verified {
-                " (verified)"
-            } else {
-                " (not verified)"
-            }
+            "Selected boards (My board first): {:?}",
+            j.board_ids
         ));
         if items.is_empty() {
             p.say("No recent/verified boards are available. Add a board manually or explicitly load boards for selected projects.");
@@ -686,15 +692,15 @@ async fn select_board(
             p.select(
                 "Board actions:",
                 &choices(&[
-                    "Choose a recent/verified board",
+                    "Choose boards from the recent/verified list (add/remove)",
                     "Add board by ID or board URL",
                     "Load all boards for selected projects (confirmation required)",
                     "Retry recent boards and saved selection verification",
-                    "Continue with selected board",
+                    "Continue with selected boards and choose My board",
                     "Change Jira connection answers",
                     "Skip Jira",
                 ]),
-                if verified {
+                if selected {
                     4
                 } else if items.is_empty() {
                     1
@@ -706,24 +712,35 @@ async fn select_board(
         };
         match action {
             0 => {
-                if items.is_empty() {
+                if items.is_empty() && j.board_ids.is_empty() {
                     continue;
                 }
-                match p
-                    .pick_one(
-                        "Jira board:",
-                        &items,
-                        index(&items, &j.board_id.to_string()),
-                    )
-                    .await
-                {
-                    Ok(at) => {
-                        j.board_id = items
-                            .get(at)
-                            .context("invalid board selection")?
-                            .id
-                            .parse()
-                            .context("invalid discovered board ID")?;
+                let saved: Vec<_> = j.board_ids.iter().map(u64::to_string).collect();
+                let mut display = items.clone();
+                for id in &saved {
+                    if !display.iter().any(|item| &item.id == id) {
+                        display.push(Choice::new(
+                            id,
+                            format!("{id} (saved; NOT verified — retry or remove)"),
+                        ));
+                    }
+                }
+                match inventory_many(p, "Jira boards:", &display, &saved).await {
+                    Ok(selected) => {
+                        if selected.len() > 100 {
+                            p.say("Select at most 100 Jira boards.");
+                            continue;
+                        }
+                        let mut ordered: Vec<_> = saved
+                            .iter()
+                            .filter(|id| selected.contains(id))
+                            .cloned()
+                            .collect();
+                        ordered.extend(selected.into_iter().filter(|id| !saved.contains(id)));
+                        j.board_ids = ordered
+                            .iter()
+                            .map(|id| id.parse().context("invalid discovered board ID"))
+                            .collect::<Result<_>>()?;
                         next_action = Some(4);
                     }
                     Err(error) if error.is::<OpenMenu>() => {}
@@ -738,14 +755,26 @@ async fn select_board(
                 if input.is_empty() {
                     continue;
                 }
-                let result = if let Some(known) = items.iter().find(|item| item.id == input) {
-                    Ok(known.clone())
+                let result = if verified_ids.contains(input) {
+                    items
+                        .iter()
+                        .find(|item| item.id == input)
+                        .cloned()
+                        .context("missing verified board")
                 } else {
                     cancellable(cancel, d.board(j, input)).await
                 };
                 match result {
                     Ok(board) => {
-                        j.board_id = board.id.parse().context("invalid verified board ID")?;
+                        verified_ids.insert(board.id.clone());
+                        let id = board.id.parse().context("invalid verified board ID")?;
+                        if !j.board_ids.contains(&id) {
+                            if j.board_ids.len() >= 100 {
+                                p.say("Select at most 100 Jira boards.");
+                                continue;
+                            }
+                            j.board_ids.push(id);
+                        }
                         merge_choices(&mut items, vec![board]);
                     }
                     Err(error) if error.is::<Cancelled>() => return Err(error),
@@ -775,9 +804,49 @@ async fn select_board(
                     }
                 }
             }
-            3 => recent_boards(p, d, cancel, j, &mut items).await?,
-            4 if verified => return Ok(Connected::Ready(())),
-            4 => p.say("Select or add a verified board before continuing."),
+            3 => recent_boards(p, d, cancel, j, &mut items, &mut verified_ids).await?,
+            4 if selected => {
+                // A recent listing or saved ID is not proof: verify every selected
+                // board with this connection, including boards omitted by recents.
+                let mut verified = Vec::new();
+                for id in &j.board_ids {
+                    let id = id.to_string();
+                    if verified_ids.contains(&id) {
+                        verified.push(
+                            items
+                                .iter()
+                                .find(|item| item.id == id)
+                                .context("missing verified board")?
+                                .clone(),
+                        );
+                        continue;
+                    }
+                    match cancellable(cancel, d.board(j, &id)).await {
+                        Ok(board) if board.id == id => {
+                            verified_ids.insert(id);
+                            merge_choices(&mut items, vec![board.clone()]);
+                            verified.push(board);
+                        }
+                        Ok(_) => p.say("Board lookup returned a different ID; retry or remove it."),
+                        Err(error) if error.is::<Cancelled>() => return Err(error),
+                        Err(error) => jira_error(
+                            p,
+                            "Selected board could not be verified; retry or remove it",
+                            &error,
+                            j,
+                        ),
+                    }
+                }
+                if verified.len() != j.board_ids.len() {
+                    continue;
+                }
+                let primary = one(p, "My board:", &verified, &j.board_ids[0].to_string()).await?;
+                let primary = primary.parse().context("invalid verified board ID")?;
+                j.board_ids.retain(|id| *id != primary);
+                j.board_ids.insert(0, primary);
+                return Ok(Connected::Ready(()));
+            }
+            4 => p.say("Select or add at least one verified board before continuing."),
             5 => return Ok(Connected::Change),
             6 => return Ok(Connected::Skip),
             _ => anyhow::bail!("invalid board action"),
@@ -984,6 +1053,9 @@ async fn select_groups(
 }
 
 fn metadata_teams(j: &JiraConfig, metadata: &Metadata) -> Vec<Choice> {
+    if metadata.board_ids != j.board_ids || metadata.team_field_name != j.team_field_name {
+        return vec![];
+    }
     let names: BTreeSet<_> = metadata
         .types
         .iter()
@@ -1003,6 +1075,221 @@ fn metadata_teams(j: &JiraConfig, metadata: &Metadata) -> Vec<Choice> {
             Choice::new(&name, format!("{name} [{scopes}]"))
         })
         .collect()
+}
+
+fn sprint_preview(p: &mut impl Prompts, j: &JiraConfig, metadata: &Metadata) -> usize {
+    let current = metadata
+        .sprints
+        .iter()
+        .filter(|s| j.current_sprint(s.board_id, &s.state, &s.name))
+        .count();
+    for (included, label) in [(true, "Included creation"), (false, "Excluded creation")] {
+        for (state, heading) in [("active", "Active"), ("future", "Future")] {
+            p.say(&format!("{label} sprints — {heading}:"));
+            let mut found = false;
+            for s in metadata
+                .sprints
+                .iter()
+                .filter(|s| s.state == state && j.allows_sprint(&s.name) == included)
+            {
+                found = true;
+                p.say(&format!(
+                    "{label} sprint: {} — {} (board {}){}",
+                    s.state,
+                    s.name,
+                    s.board_id,
+                    if j.current_sprint(s.board_id, &s.state, &s.name) {
+                        " — My current sprint match"
+                    } else {
+                        ""
+                    }
+                ));
+            }
+            if !found {
+                p.say("None.");
+            }
+        }
+    }
+    p.say(&format!("{current} matching active sprint(s) on My board using My pattern. New tickets still start with No sprint."));
+    current
+}
+
+async fn sprint_pattern_input(
+    p: &mut impl Prompts,
+    message: &str,
+    default: &str,
+) -> Result<SprintPattern> {
+    loop {
+        let value = p.text(message, default).await?;
+        match SprintPattern::new(&value) {
+            Ok(pattern) => return Ok(pattern),
+            Err(_) => p.say("Enter a bounded Rust regex search; case-sensitive unless (?i). Anchors are optional; no percent tokens."),
+        }
+    }
+}
+
+async fn select_sprint_patterns(
+    p: &mut impl Prompts,
+    j: &mut JiraConfig,
+    metadata: &Metadata,
+    args: &mut JiraArgs,
+) -> Result<()> {
+    ensure!(
+        metadata.board_ids == j.board_ids,
+        "sprint metadata does not match selected boards"
+    );
+    p.say("Sprint patterns are bounded Rust regex searches: case-sensitive unless (?i), optional anchors, no percent-token substitutions. My board + My pattern determine current sprints; ANY pattern allows creation choices across ALL selected boards.");
+    let mut supplied = !args.sprint_name_patterns.is_empty();
+    if supplied {
+        j.sprint_name_patterns
+            .clone_from(&args.sprint_name_patterns);
+    }
+    let mut edit_primary = !supplied;
+    loop {
+        if edit_primary {
+            let default = if let Some(saved) = j.sprint_name_patterns.first() {
+                saved.as_str().to_owned()
+            } else {
+                let team = regex::escape(&j.team);
+                let pattern = SprintPattern::new(&team)?;
+                let active: Vec<_> = metadata
+                    .sprints
+                    .iter()
+                    .filter(|s| s.state == "active" && Some(&s.board_id) == j.board_ids.first())
+                    .collect();
+                if active.iter().any(|s| pattern.is_match(&s.name)) {
+                    team
+                } else if let [only] = active.as_slice() {
+                    regex::escape(&only.name)
+                } else {
+                    String::new()
+                }
+            };
+            let pattern =
+                sprint_pattern_input(p, "Regular expression to identify your sprints:", &default)
+                    .await?;
+            if j.sprint_name_patterns
+                .iter()
+                .skip(1)
+                .any(|p| p.as_str() == pattern.as_str())
+            {
+                p.say("Sprint patterns must be unique; choose My pattern from the list instead.");
+                continue;
+            }
+            if let Some(primary) = j.sprint_name_patterns.first_mut() {
+                *primary = pattern;
+            } else {
+                j.sprint_name_patterns.push(pattern);
+            }
+            edit_primary = false;
+        }
+        let current = sprint_preview(p, j, metadata);
+        let action = if supplied {
+            4
+        } else {
+            p.say(&format!(
+                "Sprint patterns (My pattern first): {}",
+                j.sprint_name_patterns
+                    .iter()
+                    .map(SprintPattern::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            ));
+            p.select(
+                "Sprint pattern actions:",
+                &choices(&[
+                    "Add sprint pattern",
+                    "Edit sprint pattern",
+                    "Remove sprint pattern",
+                    "Choose My sprint pattern",
+                    "Continue with these patterns",
+                ]),
+                4,
+            )
+            .await?
+        };
+        match action {
+            0 => {
+                if j.sprint_name_patterns.len() >= 100 {
+                    p.say("Select at most 100 sprint patterns.");
+                    continue;
+                }
+                let pattern = sprint_pattern_input(p, "Additional sprint regex:", "").await?;
+                if j.sprint_name_patterns
+                    .iter()
+                    .any(|p| p.as_str() == pattern.as_str())
+                {
+                    p.say("Sprint patterns must be unique.");
+                } else {
+                    j.sprint_name_patterns.push(pattern);
+                }
+            }
+            1..=3 => {
+                let items: Vec<_> = j
+                    .sprint_name_patterns
+                    .iter()
+                    .map(|p| Choice::new(p.as_str(), p.as_str()))
+                    .collect();
+                let selected = one(
+                    p,
+                    if action == 3 {
+                        "My sprint pattern:"
+                    } else {
+                        "Sprint pattern:"
+                    },
+                    &items,
+                    j.sprint_name_patterns[0].as_str(),
+                )
+                .await?;
+                let at = j
+                    .sprint_name_patterns
+                    .iter()
+                    .position(|p| p.as_str() == selected)
+                    .context("invalid sprint pattern selection")?;
+                match action {
+                    1 => {
+                        let pattern =
+                            sprint_pattern_input(p, "Replacement sprint regex:", &selected).await?;
+                        if j.sprint_name_patterns
+                            .iter()
+                            .enumerate()
+                            .any(|(i, p)| i != at && p.as_str() == pattern.as_str())
+                        {
+                            p.say("Sprint patterns must be unique.");
+                        } else {
+                            j.sprint_name_patterns[at] = pattern;
+                        }
+                    }
+                    2 if j.sprint_name_patterns.len() == 1 => {
+                        p.say("Keep at least one sprint pattern.")
+                    }
+                    2 => {
+                        j.sprint_name_patterns.remove(at);
+                    }
+                    _ => {
+                        let primary = j.sprint_name_patterns.remove(at);
+                        j.sprint_name_patterns.insert(0, primary);
+                    }
+                }
+            }
+            4 => {
+                if current != 1 {
+                    p.say("Overview will stay empty until you explicitly choose a sprint.");
+                    if !p
+                        .confirm("Continue with no unique current-sprint default?", false)
+                        .await?
+                    {
+                        supplied = false;
+                        args.sprint_name_patterns.clear();
+                        edit_primary = true;
+                        continue;
+                    }
+                }
+                return Ok(());
+            }
+            _ => anyhow::bail!("invalid sprint pattern action"),
+        }
+    }
 }
 
 async fn load_board_teams(
@@ -1258,6 +1545,7 @@ impl Wizard {
     ) -> Result<()> {
         p.heading("Jira Cloud");
         let mut args = std::mem::take(&mut self.jira_args);
+        args.validate()?;
         if !args.any()
             && !p.confirm("Configure Jira Cloud?", true).await?
             && self.remove_jira(p).await?
@@ -1271,11 +1559,11 @@ impl Wizard {
                 value: String::new(),
             },
             projects: vec![],
-            board_id: 0,
+            board_ids: vec![],
             team: String::new(),
             team_field_name: "AssignedTeam".into(),
             assignee_groups: vec![],
-            sprint_name_pattern: SprintPattern::new(".").expect("static regex"),
+            sprint_name_patterns: vec![],
             defaults: PurposeDefaults::default(),
             project_overrides: BTreeMap::new(),
         });
@@ -1295,7 +1583,6 @@ impl Wizard {
             }
         }
         let review_supplied = args.any();
-        let mut has_pattern = self.config.jira.is_some();
         let mut saved = self
             .config
             .jira
@@ -1463,6 +1750,10 @@ impl Wizard {
             let mut metadata = match connect(p, cancel, Some(&j), || async {
                 let m = d.metadata(&j).await?;
                 ensure!(
+                    m.board_ids == j.board_ids,
+                    "metadata does not match selected ordered boards"
+                );
+                ensure!(
                     m.types.iter().any(|t| !t.teams.is_empty()),
                     "no verified team choices"
                 );
@@ -1503,61 +1794,7 @@ impl Wizard {
                     p.say(&format!("{}/{}: {note}", t.project, t.name));
                 }
             }
-            for s in &metadata.sprints {
-                p.say(&format!("Selectable sprint: {} — {}", s.state, s.name));
-            }
-            p.say("The current-sprint pattern is a bounded Rust regex search: case-sensitive unless (?i), optional anchors, no percent-token substitutions.");
-            let default_pattern = if has_pattern {
-                j.sprint_name_pattern.as_str().to_owned()
-            } else {
-                let team = regex::escape(&j.team);
-                let pattern = SprintPattern::new(&team)?;
-                if metadata
-                    .sprints
-                    .iter()
-                    .any(|s| s.state == "active" && pattern.is_match(&s.name))
-                {
-                    team
-                } else {
-                    let active: Vec<_> = metadata
-                        .sprints
-                        .iter()
-                        .filter(|s| s.state == "active")
-                        .collect();
-                    if let [only] = active.as_slice() {
-                        regex::escape(&only.name)
-                    } else {
-                        String::new()
-                    }
-                }
-            };
-            loop {
-                let pattern = if let Some(pattern) = &args.sprint_name_pattern {
-                    pattern.clone()
-                } else {
-                    let pattern = text(p, "Regular expression to identify your sprints:", &default_pattern, |s| SprintPattern::new(s).is_ok(), "Enter a bounded Rust regex search; case-sensitive unless (?i). Anchors are optional; no percent tokens.").await?;
-                    SprintPattern::new(&pattern)?
-                };
-                let matching = metadata
-                    .sprints
-                    .iter()
-                    .filter(|s| s.state == "active" && pattern.is_match(&s.name))
-                    .count();
-                p.say(&format!("{matching} matching active sprint(s). All active/future sprints remain selectable; new tickets still start with No sprint."));
-                if matching != 1 {
-                    p.say("Overview will stay empty until you explicitly choose a sprint.");
-                    if !p
-                        .confirm("Continue with no unique current-sprint default?", false)
-                        .await?
-                    {
-                        args.sprint_name_pattern = None;
-                        continue;
-                    }
-                }
-                j.sprint_name_pattern = pattern;
-                has_pattern = true;
-                break;
-            }
+            select_sprint_patterns(p, &mut j, &metadata, &mut args).await?;
             if !complete_team_command
                 && p.confirm("Configure advanced issue-type/workflow suggestions?", false)
                     .await?
@@ -2344,7 +2581,7 @@ mod tests {
     use super::*;
 
     fn jira() -> JiraConfig {
-        Config::from_yaml("jira:\n  base_url: https://synthetic.atlassian.net\n  email: human@example.invalid\n  token: {value: synthetic-secret}\n  projects: [ONE]\n  board_id: 7\n  team: Team\n  sprint_name_pattern: Team\n")
+        Config::from_yaml("jira:\n  base_url: https://synthetic.atlassian.net\n  email: human@example.invalid\n  token: {value: synthetic-secret}\n  projects: [ONE]\n  board_ids: [7]\n  team: Team\n  sprint_name_patterns: [Team]\n")
             .unwrap().jira.unwrap()
     }
 
@@ -2355,7 +2592,7 @@ mod tests {
         // Client construction is local only: no identity/GET is executed here.
         let first = discovery.client(&j).await.unwrap();
         j.projects.push("TWO".into());
-        j.board_id = 42;
+        j.board_ids = vec![42];
         let same = discovery.client(&j).await.unwrap();
         assert!(Arc::ptr_eq(&first, &same));
         j.email = "other@example.invalid".into();

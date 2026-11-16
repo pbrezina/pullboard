@@ -101,11 +101,11 @@ def smoke(binary, no_color=False, termination=None, at_password=False, manual=Fa
                         wait("Jira projects:")
                     # Type-filter, arrow navigation and Space in a real MultiSelect.
                     os.write(master, b"two\x1b[B \r")
-                    wait("Jira board:")
+                    wait("Jira boards:")
                     if discovery_menu:
                         os.write(master, b"\x0f")
                         answer("Board actions:")
-                        wait("Jira board:")
+                        wait("Jira boards:")
                     os.write(master, b"\r")
                 wait("Assignee groups (at least one):")
                 if discovery_menu:
@@ -125,6 +125,7 @@ def smoke(binary, no_color=False, termination=None, at_password=False, manual=Fa
                     wait("Team:")
                 os.write(master, b"\r")
                 answer("Regular expression to identify your sprints:")
+                answer("Sprint pattern actions:")
                 answer("Configure advanced issue-type/workflow suggestions?")
                 if forge_cancel:
                     answer("Add a forge account?", b"y\r")

@@ -45,18 +45,23 @@ jira:
   # Both searches consider every status except Closed open; resolution and the Done
   # status category do not exclude issues. No additional configuration keys are needed.
   projects: [DEV]                    # YAML order; first configured project supplies header
-  board_id: 42                       # required positive ID; only this board is queried
+  board_ids: [42, 43]                # required 1..100 unique positive IDs; first is My board
   team: Example Platform             # required semantic default, NOT sprint ownership
   # Rust regex search, case-sensitive unless (?i); anchors optional. No percent tokens.
-  sprint_name_pattern: 'EXAMPLE'      # required, <=4096 UTF-8 bytes; defaults only
+  sprint_name_patterns: ['EXAMPLE', 'OTHER'] # required 1..100 unique regexes; <=4096 bytes each
+  # First board + first pattern determine current active sprints; no fallback.
+  # All boards supply display/filter sprints; ANY pattern allows creation choices.
+  # Boards/patterns are independent lists, not pairs. New tickets start No sprint.
+  # Deduplicate sprint IDs with first-configured-board provenance; never follow originBoardId.
   # Optional exact semantic field name; absent means AssignedTeam. No raw field IDs.
   # team_field_name: AssignedTeam
   # Multiple group names form a union, deduplicated then individually checked for
   # project assignability. Absent/[] enumerates all users and checks each candidate;
   # this needs broader directory permissions and can cost many requests at refresh.
-  # Complete choices/policy publish with Jira cards; dialogs/search/submit use that cache.
-  # Failed refresh retains same-scope last-good choices as stale; policy changes wait
-  # for the next successful refresh. No incomplete/unrestricted fallback.
+  # Complete choices/own sprints/policy publish independently of Jira cards.
+  # Dialogs/search/submit use one committed generation, never newer display sprints.
+  # Options failure retains complete same-scope last-good choices as stale; policy
+  # changes wait for successful options publication. No partial/unrestricted fallback.
   assignee_groups: [example-engineering, example-reviewers]
   defaults:                          # optional; these are also the built-in policies
     implementation: {issue_type: Task, assignee: null}

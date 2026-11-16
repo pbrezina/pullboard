@@ -35,16 +35,18 @@ accessible project, including issues assigned to others or unassigned. This does
 creation/link permissions or the configured project inventory. PR reviewers/assignees
 exclude you and sort by username; the author/reporter can still be you.
 
-Jira selectors offer every configured-board active/future sprint, grouped **Active**
+Jira board filters offer every active/future sprint collected from all configured boards, grouped **Active**
 and **Future**, **No sprint**, and **All sprints & no sprint**. There is no synthetic
 eligible-active-sprints option. Needs Attention initially includes all sprint and
 no-sprint work, so backlog mentions remain visible. Upstream Pull Requests (Overview)
-initially selects an actual sprint ID only when **exactly one** active sprint matches
-the configured Rust regex search. Zero matches show **No current sprint**; multiple
+initially selects an actual sprint ID only when **exactly one** active sprint returned
+by the **first board** matches the **first Rust regex**. Zero matches show **No current sprint**; multiple
 matches show **Multiple current sprints — choose a sprint**. Both leave Jira results
 empty until you choose a filter—no first-sprint, union or all-sprints fallback.
 Nonmatching, foreign-origin and future sprints remain available for explicit choice.
-Pattern/default policy never filters upstream discovery or attention.
+Additional boards/patterns never supply a fallback current sprint. Pattern/default
+policy never filters upstream discovery or attention. Creation selectors are different:
+they offer only names matching any committed pattern, and start No sprint.
 PR selectors offer all forges or an individual source instance, not merely a
 provider type. Each tab remembers its own case-insensitive title filters and
 selections. Attention badges retain the **unfiltered total**; filtered results show
@@ -85,9 +87,9 @@ Who-am-I shows verified identities and **Current project**: the real key/name of
 the first Jira project in YAML order, or **Not available yet** before discovery/with
 Jira disabled. This real project and current sprints are discovered with ticket/display
 work, without waiting for creation metadata. A forge's draft project override does not
-change this header. Only
-pattern-matching active sprints appear here, with their end date when available;
-links set `selectedSprint` on the trusted configured-board URL, preserving its other
+change this header. Only active first-pattern matches returned by the first board
+appear here, with their end date when available;
+links set `selectedSprint` on the trusted **first-board** URL, preserving its other
 parameters. No matching sprint and multiple-match ambiguity are explicit, not an
 automatic choice. Nonmatches remain selectable in filters, not in this header.
 The Test/Live strip and source health show mode and refresh state. An empty board

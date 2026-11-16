@@ -7,7 +7,7 @@
     {"id": "jira-other", "username": "", "display_name": "Sam Example", "url": null, "email": null}
   ],
   "sprints": [
-    {"id": "22569", "board_id": 14585, "team": null, "name": "2026-CORE-S12", "state": "active", "default_eligible": false, "board_url": "https://jira.example.test/secure/RapidBoard.jspa?rapidView=14585", "start_at": null, "end_at": null},
+    {"id": "22569", "board_id": 11235, "team": null, "name": "2026-IDM-SSSD-CORE-S12", "state": "active", "default_eligible": false, "board_url": "https://jira.example.test/secure/RapidBoard.jspa?rapidView=11235", "start_at": null, "end_at": null},
     {"id": "89396", "board_id": 14585, "team": null, "name": "2026-IDM-SSSD-IDENTITY-S12", "state": "active", "default_eligible": true, "board_url": "https://jira.example.test/secure/RapidBoard.jspa?rapidView=14585", "start_at": null, "end_at": null},
     {"id": "89397", "board_id": 14585, "team": null, "name": "2026-IDM-SSSD-IDENTITY-S13", "state": "future", "default_eligible": false, "board_url": "https://jira.example.test/secure/RapidBoard.jspa?rapidView=14585", "start_at": null, "end_at": null}
   ],

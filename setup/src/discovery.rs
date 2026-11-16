@@ -838,6 +838,8 @@ pub async fn board_from(http: &impl GetJson, jira: &JiraConfig, input: &str) -> 
 #[derive(Clone)]
 pub struct Sprint {
     pub id: String,
+    /// First configured board returning this sprint, never originBoardId.
+    pub board_id: u64,
     pub name: String,
     pub state: String,
 }
@@ -857,7 +859,7 @@ pub struct TypeMetadata {
 }
 #[derive(Clone, Default)]
 pub struct Metadata {
-    pub board_id: u64,
+    pub board_ids: Vec<u64>,
     pub team_field_name: String,
     pub team_field_id: Option<String>,
     pub types: Vec<TypeMetadata>,
@@ -894,44 +896,54 @@ pub async fn metadata_from(http: &impl GetJson, jira: &JiraConfig) -> Result<Met
     if let Some(id) = team_id {
         validate_team_field_id(id)?;
     }
-    let board = http
-        .get_json(&format!("rest/agile/1.0/board/{}", jira.board_id), &[])
-        .await
-        .context("verify selected Jira board for metadata")?;
-    ensure!(
-        board.get("id").and_then(Value::as_u64) == Some(jira.board_id),
-        "Jira metadata board lookup returned a different board ID"
-    );
+    pullboard_core::config::validate_board_ids(&jira.board_ids)?;
     let mut out = Metadata {
-        board_id: jira.board_id,
+        board_ids: jira.board_ids.clone(),
         team_field_name: jira.team_field_name.clone(),
         team_field_id: team_id.map(str::to_owned),
         ..Metadata::default()
     };
     let mut sprint_ids = BTreeSet::new();
-    for s in pages(
-        http,
-        &format!("rest/agile/1.0/board/{}/sprint", jira.board_id),
-        &[("state", "active,future".into())],
-        &["values"],
-    )
-    .await?
-    {
-        let id = numeric(&s, "id")?;
+    // Sequential reads share the existing transport and pagination bounds. Build
+    // the entire union privately; a required board/page failure returns no metadata.
+    for &board_id in &jira.board_ids {
+        let board = http
+            .get_json(&format!("rest/agile/1.0/board/{board_id}"), &[])
+            .await
+            .context("verify selected Jira board for metadata")?;
         ensure!(
-            sprint_ids.insert(id.clone()),
-            "Jira sprint inventory repeated an identity"
+            board.get("id").and_then(Value::as_u64) == Some(board_id),
+            "Jira metadata board lookup returned a different board ID"
         );
-        let state = text(&s, "state")?;
-        ensure!(
-            matches!(state, "active" | "future"),
-            "Jira active/future sprint inventory returned an unexpected state"
-        );
-        out.sprints.push(Sprint {
-            id,
-            name: text(&s, "name")?.into(),
-            state: state.into(),
-        });
+        let mut board_sprint_ids = BTreeSet::new();
+        for s in pages(
+            http,
+            &format!("rest/agile/1.0/board/{board_id}/sprint"),
+            &[("state", "active,future".into())],
+            &["values"],
+        )
+        .await?
+        {
+            let id = numeric(&s, "id")?;
+            ensure!(
+                board_sprint_ids.insert(id.clone()),
+                "Jira sprint inventory repeated an identity"
+            );
+            let state = text(&s, "state")?;
+            ensure!(
+                matches!(state, "active" | "future"),
+                "Jira active/future sprint inventory returned an unexpected state"
+            );
+            if !sprint_ids.insert(id.clone()) {
+                continue;
+            }
+            out.sprints.push(Sprint {
+                id,
+                board_id,
+                name: text(&s, "name")?.into(),
+                state: state.into(),
+            });
+        }
     }
     for project in &jira.projects {
         ensure!(
@@ -1119,8 +1131,8 @@ pub async fn board_teams_from(
     metadata: &Metadata,
 ) -> Result<BoardTeams> {
     ensure!(
-        jira.board_id > 0
-            && metadata.board_id == jira.board_id
+        !jira.board_ids.is_empty()
+            && metadata.board_ids == jira.board_ids
             && metadata.team_field_name == jira.team_field_name,
         "team metadata does not match the selected board/field scope"
     );
@@ -1145,7 +1157,11 @@ pub async fn board_teams_from(
     let mut teams = BTreeSet::new();
     let mut unverified_values = BTreeSet::new();
     let mut sprint_ids = BTreeSet::new();
-    for sprint in metadata.sprints.iter().filter(|s| s.state == "active") {
+    for sprint in metadata
+        .sprints
+        .iter()
+        .filter(|s| s.state == "active" && Some(&s.board_id) == jira.board_ids.first())
+    {
         let id = positive_id(&sprint.id).context("invalid active sprint identity")?;
         ensure!(
             sprint_ids.insert(id),
@@ -1153,7 +1169,7 @@ pub async fn board_teams_from(
         );
         let path = format!(
             "rest/software/1.0/board/{}/sprint/{id}/issue",
-            jira.board_id
+            sprint.board_id
         );
         let mut next_token: Option<String> = None;
         let mut tokens = BTreeSet::new();

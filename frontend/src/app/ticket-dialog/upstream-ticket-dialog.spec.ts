@@ -12,6 +12,7 @@ import {
   board,
   context,
   options,
+  orderedSprintScenario,
   person,
   runtimeMode,
   sync,
@@ -166,6 +167,44 @@ describe('Upstream issue in the shared ticket editor', () => {
       status: '',
     });
     expect(c.createBlocked()).toBe(false);
+  });
+  it('offers only supplied creation sprints and preserves an allowed additional-board CORE through card refresh', async () => {
+    const scenario = orderedSprintScenario('implementation');
+    const store = TestBed.inject(BoardStore);
+    store.board.set(scenario.board);
+    const f = TestBed.createComponent(TicketDialog);
+    http.expectOne('/api/upstream-issues/ticket-drafts').flush(upstreamDraft(issue));
+    http.expectOne((r) => r.url === '/api/jira/options').flush(scenario.options);
+    await f.whenStable();
+    const c = f.componentInstance;
+    const select = f.nativeElement.querySelector('#ticket-sprint') as HTMLSelectElement;
+    expect(c.model()).toMatchObject({ sprint: '', assignee: '', status: '' });
+    expect(Array.from(select.options, (o) => o.value)).toEqual([
+      '',
+      ...scenario.options.sprints.map((s) => s.id),
+    ]);
+    c.model.update((m) => ({ ...m, sprint: scenario.excluded.id }));
+    c.save(new Event('submit'));
+    http.expectNone('/api/upstream-issues/jira-issues');
+    expect(c.fieldErrors().sprint).toBe('Select an available sprint.');
+    c.model.update((m) => ({ ...m, sprint: scenario.core.id, title: 'Explicit CORE clone' }));
+    store.board.set({ ...scenario.board, revision: 2, sprints: [scenario.excluded] });
+    store.context.set({ ...scenario.context, current_sprints: [] });
+    store.sync.set({ ...sync('syncing'), board_revision: 2 });
+    await f.whenStable();
+    expect(select.value).toBe(scenario.core.id);
+    expect(c.model().title).toBe('Explicit CORE clone');
+    expect(c.review.captured()).toEqual(runtimeMode());
+    http.expectNone((r) => r.url === '/api/jira/options');
+    c.save(new Event('submit'));
+    const request = await vi.waitFor(() => http.expectOne('/api/upstream-issues/jira-issues'));
+    expect(request.request.body).toMatchObject({
+      upstream_issue_id: issue.id,
+      sprint_id: scenario.core.id,
+      expected_mode_revision: 'mode-test-1',
+    });
+    request.flush({ outcome: 'simulated', issue: null, message: 'Simulated.', warnings: [] });
+    await f.whenStable();
   });
   it('preserves an overlong upstream title for explicit editing rather than silently truncating it', async () => {
     const f = TestBed.createComponent(TicketDialog);

@@ -13,6 +13,10 @@ pub struct Metadata {
     pub sprint_field: Option<String>,
     pub assignees: BTreeMap<String, Vec<JiraAssignee>>,
     pub sprints: Vec<Sprint>,
+    // Keep the committed semantic policy and its evaluated membership together.
+    // Cache reads deserialize strings/IDs, not freshly compiled regexes per request.
+    sprint_name_patterns: Vec<String>,
+    pub(super) allowed_sprint_ids: BTreeSet<String>,
     assignee_groups: Vec<String>,
     team: String,
     policies: BTreeMap<String, [crate::config::PurposePolicy; 2]>,
@@ -401,13 +405,13 @@ impl Jira {
             .get(
                 &format!(
                     "rest/agile/1.0/board/{}/configuration",
-                    self.config.board_id
+                    self.config.board_ids[0]
                 ),
                 &[],
             )
             .await
             .map_err(discovery_error)?;
-        if board.get("id").and_then(Value::as_u64) != Some(self.config.board_id) {
+        if board.get("id").and_then(Value::as_u64) != self.config.board_ids.first().copied() {
             return Err(failed());
         }
         let estimation = board
@@ -421,6 +425,13 @@ impl Jira {
             sprint_field,
             assignees: BTreeMap::new(),
             sprints: vec![],
+            sprint_name_patterns: self
+                .config
+                .sprint_name_patterns
+                .iter()
+                .map(|p| p.as_str().to_owned())
+                .collect(),
+            allowed_sprint_ids: BTreeSet::new(),
             assignee_groups: self.group_names(),
             team: self.config.team.clone(),
             policies: self
@@ -945,7 +956,12 @@ impl Jira {
             .filter(|p| purpose != Purpose::Review || &p.id != me)
             .cloned()
             .collect();
-        let sprints = metadata.sprints.clone();
+        let sprints = metadata
+            .sprints
+            .iter()
+            .filter(|s| metadata.allowed_sprint_ids.contains(&s.id))
+            .cloned()
+            .collect();
         let selected = selected_type
             .as_ref()
             .and_then(|t| metadata.types.get(key).and_then(|types| types.get(t)));

@@ -10,11 +10,15 @@ work and your open PRs. Individual threads—not commits, local reads or
 dismissals—determine whether attention remains.
 
 The header shows the first configured Jira project's discovered key/name and only
-pattern-matching active sprints. Overview starts on a sprint only when exactly one
+active sprints returned by the first board and matching the first regex in the ordered
+`board_ids`/`sprint_name_patterns` lists. No additional-board/pattern fallback is used.
+Overview starts on a sprint only when exactly one
 matches; zero/multiple matches require a deliberate filter choice. Attention starts
 with all sprint and no-sprint work. Ticket editors start Unassigned, No sprint and
 Jira default/no transition, using complete choices cached during normal refresh.
-See [dashboard defaults](attention.md) and [Jira choices](jira.md).
+All boards supply sprint filters; creation choices match any committed pattern.
+See [dashboard defaults](attention.md), [Jira choices](jira.md) and
+[migration from singular settings](configuration.md#migrate-singular-sprint-settings).
 
 **[Upstream issues](upstream-issues.md)** is a separate compact list of open issues
 assigned to you on configured GitHub, GitLab, Codeberg and Forgejo instances, with

@@ -10,7 +10,7 @@ pub fn forge(kind: &str, base: &str) -> ForgeConfig {
     serde_yaml::from_str(&format!("id: test-forge\nname: Test Forge\nkind: {kind}\nbase_url: {base}\ntoken: {{value: test-secret}}\n")).unwrap()
 }
 pub fn jira(base: &str) -> JiraConfig {
-    serde_yaml::from_str(&format!("base_url: {base}\nemail: me@example.invalid\ntoken: {{value: test-secret}}\nprojects: [DEV]\nboard_id: 12\nteam: Platform\nsprint_name_pattern: '^[0-9]{{4}}-Platform-S[0-9]+$'\n")).unwrap()
+    serde_yaml::from_str(&format!("base_url: {base}\nemail: me@example.invalid\ntoken: {{value: test-secret}}\nprojects: [DEV]\nboard_ids: [12]\nteam: Platform\nsprint_name_patterns: ['^[0-9]{{4}}-Platform-S[0-9]+$']\n")).unwrap()
 }
 pub fn config() -> Config {
     let mut c = Config::default();

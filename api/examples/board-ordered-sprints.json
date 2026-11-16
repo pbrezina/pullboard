@@ -1,0 +1,16 @@
+{
+  "revision": 1,
+  "generated_at": "2026-11-09T12:00:00Z",
+  "issues": [],
+  "pull_requests": [],
+  "upstream_issues": [],
+  "sprints": [
+    {"id": "22569", "board_id": 11235, "team": null, "name": "2026-IDM-SSSD-CORE-S12", "state": "active", "default_eligible": false, "board_url": "https://jira.example.test/secure/RapidBoard.jspa?rapidView=11235", "start_at": null, "end_at": null},
+    {"id": "22188", "board_id": 11235, "team": null, "name": "2026-IDM-UAH-S12", "state": "active", "default_eligible": false, "board_url": "https://jira.example.test/secure/RapidBoard.jspa?rapidView=11235", "start_at": null, "end_at": null},
+    {"id": "89396", "board_id": 14585, "team": null, "name": "2026-IDM-SSSD-IDENTITY-S12", "state": "active", "default_eligible": true, "board_url": "https://jira.example.test/secure/RapidBoard.jspa?rapidView=14585", "start_at": null, "end_at": null},
+    {"id": "89397", "board_id": 14585, "team": null, "name": "2026-IDM-SSSD-IDENTITY-S13", "state": "future", "default_eligible": false, "board_url": "https://jira.example.test/secure/RapidBoard.jspa?rapidView=14585", "start_at": null, "end_at": null}
+  ],
+  "sources": [
+    {"source_id": "jira", "name": "Jira", "kind": "jira", "status": "ok", "last_success_at": "2026-11-09T12:00:00Z", "last_attempt_at": "2026-11-09T11:59:55Z", "error": null, "retry_at": null, "coverage_notes": []}
+  ]
+}

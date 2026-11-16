@@ -65,7 +65,7 @@ AI or add attention. Manual content stays outside Board/SQLite in a process-loca
 policy. Refresh preserves those selections; eviction/restart/scope invalidation
 requires explicit recovery, not automatic create replay. Jira cloning does not
 introduce duplicate searches, clone state or broad Jira/forge scans. See
-[upstream issue flow](upstream-issues.md) and [v1.6 API](api.md).
+[upstream issue flow](upstream-issues.md) and [v1.7 API](api.md).
 
 Keep upstream IDs and timestamps real. Never infer handled attention from a commit,
 manufacture missing event times, synthesize Jira IDs, or conceal coverage gaps. A
@@ -73,14 +73,14 @@ new adapter must preserve last-good snapshots on failure and expose limitations.
 Only verified same-scope snapshots may be retained; startup quarantine must not
 expose a prior account. Identity bootstrap and ticket visibility are distinct from
 complete options readiness. Normal refresh publishes complete Jira choices, their own
-sprints and effective policy as one independent generation; options/drafts/create use
+sprints and effective group/default/pattern policy as one independent generation; options/drafts/create use
 that committed generation without repeating metadata, group or per-user discovery.
 Options failure retains complete same-scope last-good choices as stale and usable,
 with independent health/readiness, without undoing fresh cards. Before a verified
 complete generation, creation is blocked; no optimistic assignments are exposed.
 Scope quarantine applies immediately to incompatible cards and choices. Policy changes
 take effect only at successful options commit, not by combining new rules with an old
-pool or newer board sprints. Final create uses the latest committed choices rather than
+pool, live YAML pattern policy or newer board sprints. Final create uses the latest committed choices rather than
 trusting the client picker; Jira enforces current write permissions.
 Adding a provider method must not expand forge write capability.
 
@@ -134,12 +134,17 @@ its instance/repository/title preferences are independent of Jira/PR tab filters
 The header's real current project key/name comes from the first YAML Jira project,
 with a minimal early lookup if needed and no later-project fallback. It and board/current
 sprints publish with ticket/display work, without waiting for creation metadata;
-issue types may remain empty until options commit. Only pattern-matching active
-sprints are current. Overview selects an
+issue types may remain empty until options commit. Ordered `board_ids` supply a complete
+active/future union, deduplicated by sprint ID with earliest-configured-board provenance,
+never `originBoardId` traversal. Only active first-pattern matches returned by the
+first board are current; additional boards/patterns are never a fallback. Header links
+and estimation metadata use only the first board. Overview selects an
 actual ID initially/reset only for one match; zero/multiple matches require deliberate
 choice, while Attention defaults all/no sprint. No synthetic eligible-sprints filter
 or automatic union remains. Every ticket editor starts Unassigned/No sprint/no
-transition. A lazy-loaded editor uses a complete locally filtered virtualized
+transition. Creation sprint choices match any pattern in one committed generation's
+own complete multi-board snapshot, independently of team/purpose; display sprints,
+existing assignments and Attention remain unfiltered by pattern. A lazy-loaded editor uses a complete locally filtered virtualized
 assignee list and per-type discovered status choices. Explicit unique-name status
 submission allows at most one direct transition after creation; failure preserves
 created success and its persistent linked warning, never triggers duplicate creation.
@@ -197,9 +202,9 @@ not multiply or silently raise caps. Pagination, response/time bounds and backof
 remain unchanged; hybrid eligibility and new bulk APIs are out of scope. See
 [configuration](configuration.md#controls) for
 the three YAML knobs and [providers](providers.md#shared-request-budgets-and-rate-limits)
-for conservative cross-credential sharing and quota/backoff behavior. Contract v1.6
-permits concurrent options progress combinations without new wire fields/phases,
-YAML settings, create fields, attention rules or write permissions. There is no
+for conservative cross-credential sharing and quota/backoff behavior. Contract v1.7
+preserves v1.6's concurrent options progress combinations without new wire
+fields/phases, concurrency settings, create fields, attention rules or write permissions. There is no
 measured speedup claim for this scheduling change.
 
 Application-owned INFO diagnostics report safe source read/publication durations,

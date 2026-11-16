@@ -219,7 +219,7 @@ async fn type_specific_capabilities_defaults_and_search_do_not_change_authorizat
     assert!(implementation.defaults.assignee_id.is_none());
     assert!(implementation.defaults.sprint_id.is_none());
     assert_eq!(implementation.capabilities.sprint.mode, "follow_up");
-    assert_eq!(implementation.sprints.len(), 3);
+    assert_eq!(implementation.sprints.len(), 2);
     assert!(
         implementation
             .sprints
@@ -314,7 +314,7 @@ async fn create_uses_discovered_select_object_numeric_points_and_sprint_not_labe
     field_page(&server, 1, fields).await;
     sprint_page(
         &server,
-        json!([{"id":875,"name":"Foreign","state":"future","originBoardId":99}]),
+        json!([{"id":875,"name":"2026-Platform-S1","state":"future","originBoardId":99}]),
     )
     .await;
     let j = ready(&server).await;

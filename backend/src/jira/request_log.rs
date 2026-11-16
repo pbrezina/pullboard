@@ -215,7 +215,7 @@ mod tests {
 
     async fn client(server: &MockServer, limits: Upstream) -> Arc<Jira> {
         let config = serde_yaml::from_str(&format!(
-            "base_url: {}\nemail: private-email@example.invalid\ntoken: {{value: private-token}}\nprojects: [DEV]\nboard_id: 12\nteam: Platform\nsprint_name_pattern: '.*'\n",
+            "base_url: {}\nemail: private-email@example.invalid\ntoken: {{value: private-token}}\nprojects: [DEV]\nboard_ids: [12]\nteam: Platform\nsprint_name_patterns: ['.*']\n",
             server.uri()
         )).unwrap();
         Jira::new(&config, &limits).await.unwrap()

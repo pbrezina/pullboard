@@ -22,6 +22,12 @@ async fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
+    if cli.jira.validate().is_err() {
+        eprintln!(
+            "PullBoard setup: use 1..100 unique ordered board IDs and sprint patterns; My board and My pattern go first."
+        );
+        return std::process::ExitCode::from(2);
+    }
     match pullboard_setup::wizard::run(cli).await {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {

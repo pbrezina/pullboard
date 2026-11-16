@@ -3,8 +3,11 @@
 `api/openapi.json` is the normative OpenAPI 3.1 wire contract; `api/CONTRACT.md`
 explains its invariants. Both live in the repository and must be read before
 API-facing changes. This guide does not define an alternative payload format.
-The current contract is **v1.6.0**: ticket-favoring concurrent refresh permits overlapping
-ticket, metadata/group and eligibility progress without new wire fields/phases.
+The current contract is **v1.7.0**: ordered YAML `board_ids` and `sprint_name_patterns`
+replace the singular settings. First board/pattern identify current sprints; all
+boards supply display sprints and any committed pattern allows creation choices.
+Wire shapes are unchanged. Ticket-favoring concurrent refresh still permits overlapping
+ticket, metadata/group and eligibility progress without new fields/phases.
 Independent source publications, `SyncStatus.board_revision`, separate nullable
 `SyncStatus.jira_options` health/readiness/progress, complete atomic choice generations,
 name-based create `status` and upstream-issue endpoints remain. Consult the canonical
@@ -13,13 +16,13 @@ contract files for exact schemas, required/null fields and ordering rules.
 | Method | Endpoint | Result |
 | --- | --- | --- |
 | GET | `/api/health` | Process health/version and atomic runtime mode/revision pair; not upstream health |
-| GET | `/api/context` | Verified identities, nullable first configured current project, pattern-matching active sprints, discovered projects, AI summary and atomic mode/revision pair |
+| GET | `/api/context` | Verified identities, nullable first configured current project, active first-board/first-pattern sprint matches, discovered projects, AI summary and atomic mode/revision pair |
 | GET | `/api/runtime-mode` | `{read_only_test_mode, mode_revision}` shared by all clients |
 | POST | `/api/runtime-mode` | `{read_only_test_mode, expected_mode_revision}` → resulting mode/revision pair |
 | GET | `/api/board` | Single coherent snapshot, revision and source health |
 | GET | `/api/sync` | Worker status, committed `board_revision`, live ticket-source health/progress and independent `jira_options` readiness/health/progress |
 | POST | `/api/sync` | `{}` requests/coalesces a refresh; 202 |
-| GET | `/api/jira/options?project_key=DEV&purpose=review&issue_type=Task&query=text` | Complete options generation's cached types/teams/statuses, board active/future sprints, permitted assignees, purpose defaults/capabilities/diagnostics |
+| GET | `/api/jira/options?project_key=DEV&purpose=review&issue_type=Task&query=text` | Complete options generation's cached types/teams/statuses, active/future sprints matching any committed pattern, permitted assignees, purpose defaults/capabilities/diagnostics |
 | POST | `/api/ticket-drafts` | Cached PR ID, purpose and optional project → editable proposal, no Jira writes |
 | POST | `/api/jira/issues` | Explicit create request including `expected_mode_revision` → created or simulated result |
 | POST | `/api/jira/issues/{issue_key}/links` | Cached PR ID plus `expected_mode_revision` → linked, duplicate or simulated result |
@@ -208,7 +211,8 @@ Unknown `/api/*` paths are JSON 404, **never** the SPA index.
 
 `Identity.account_id` is the verified upstream principal; pre-bootstrap identities
 are empty, not synthesized. `Project` contains discovered key/name/issue_types only.
-`Sprint.team` is nullable ownership, `default_eligible` controls defaults only.
+`Sprint.team` is nullable ownership; `default_eligible` identifies current display/
+Overview matches, not creation-choice inclusion or an initial ticket sprint.
 Ticket `team` is a returned opaque `teams[].id`, not a label, field ID or sprint team.
 Purpose-specific defaults include nullable type/team and workflow suggestions;
 assignee/sprint defaults and draft `suggested_status` are always null.
@@ -225,13 +229,25 @@ sprint follow-up versus unsupported Atlassian Team discovery.
 available project or hardcoded IDM; it is null with Jira disabled/pending/unavailable
 discovery. A minimal lookup can publish its real key/name early with `issue_types: []`
 until complete options metadata commits; project visibility does not confer readiness.
-`current_sprints` publishes with Jira tickets and contains only active regex search matches, sorted by
-case-insensitive name then ID for display, not selection priority. Board/options
-still return every active/future sprint. Header links set `selectedSprint` on trusted
-`board_url`, preserving other query parameters. Overview initially/reset selects an
+`Board.sprints` publishes with Jira tickets and contains the complete active/future
+union from all ordered `board_ids`, fully paginated and deduplicated by sprint ID.
+First-configured-board provenance wins, not request completion order; never follow
+`originBoardId`. `Sprint.board_id`/`board_url` describe the queried board, not ownership.
+`default_eligible` is exactly active AND returned by the first board AND matching
+the first regex. `Context.current_sprints` contains only these entries, sorted by
+case-insensitive name then ID for display, not selection priority. No additional
+board/pattern fallback is allowed. Header links use only the first board and set
+`selectedSprint` on its trusted `board_url`, preserving other query parameters.
+Estimation metadata likewise comes from the first board. Overview initially/reset selects an
 actual ID only for one match; zero/multiple matches leave an explicit empty/choose
 state until deliberate selection. Attention defaults all/no sprint. No synthetic
 eligible-sprints filter; deliberate per-tab choices survive refreshes.
+
+`JiraOptions.sprints` instead exposes only names matching **any** pattern in its own
+committed generation's complete multi-board sprint snapshot. Board/pattern lists are
+independent, not positional pairs; creation inclusion applies to every purpose and
+is independent of ticket team. Patterns do not filter Board.sprints, tickets, existing
+assignments, board filters or Attention. Editors still start No sprint.
 
 `JiraOptions.assignees` uses `JiraAssignee` (Person fields plus required nullable
 `email`, exposed upstream only). `statuses` is an always-present array of real
@@ -242,8 +258,9 @@ not initially selected editor status. Every editor starts Unassigned/No sprint/n
 transition, including legacy configured `assignee: me`.
 
 Normal Jira refresh fully discovers choices for every allowed type/project and
-publishes them atomically with their own sprints and effective policy in an independent
-options generation in ephemeral SQLite, never merged with newer board sprints.
+publishes them atomically with their own complete sprints and effective pattern/group/default
+policy in an independent options generation in ephemeral SQLite. Inclusion and final
+validation capture one committed generation, never live YAML or newer board sprints.
 Options/drafts/create never repeat group, per-user, metadata or status discovery.
 An active refresh leaves old complete choices usable. Failure retains the complete
 same-scope last-good generation with stale `jira_options.health`, independently of

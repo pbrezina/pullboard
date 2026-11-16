@@ -31,9 +31,9 @@ pub struct JiraArgs {
     /// Comma-separated project keys, primary first (1..100 unique projects).
     #[arg(long = "jira-projects", value_parser = projects)]
     pub projects: Option<JiraList>,
-    /// Positive Jira board ID, verified using the current user's credentials.
+    /// Repeat for ordered board IDs (My board first); every board is verified.
     #[arg(long = "jira-board-id", value_parser = board_id)]
-    pub board_id: Option<u64>,
+    pub board_ids: Vec<u64>,
     /// Comma-separated exact assignee-group names; at least one is required.
     #[arg(long = "jira-groups", value_parser = groups)]
     pub groups: Option<JiraList>,
@@ -43,30 +43,40 @@ pub struct JiraArgs {
     /// Exact team option name, verified against project/type create metadata.
     #[arg(long = "jira-team", value_parser = nonblank)]
     pub team: Option<String>,
-    /// Bounded Rust regex search (max 4096 UTF-8 bytes); affects defaults only.
+    /// Repeat for ordered bounded Rust regexes (My pattern first); never comma-split.
     #[arg(long = "jira-sprint-name-pattern", value_parser = sprint_pattern)]
-    pub sprint_name_pattern: Option<SprintPattern>,
+    pub sprint_name_patterns: Vec<SprintPattern>,
 }
 
 impl JiraArgs {
     pub fn any(&self) -> bool {
         self.url.is_some()
             || self.projects.is_some()
-            || self.board_id.is_some()
+            || !self.board_ids.is_empty()
             || self.groups.is_some()
             || self.team_field.is_some()
             || self.team.is_some()
-            || self.sprint_name_pattern.is_some()
+            || !self.sprint_name_patterns.is_empty()
     }
 
     pub fn complete(&self) -> bool {
         self.url.is_some()
             && self.projects.is_some()
-            && self.board_id.is_some()
+            && !self.board_ids.is_empty()
             && self.groups.is_some()
             && self.team_field.is_some()
             && self.team.is_some()
-            && self.sprint_name_pattern.is_some()
+            && !self.sprint_name_patterns.is_empty()
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if !self.board_ids.is_empty() {
+            pullboard_core::config::validate_board_ids(&self.board_ids)?;
+        }
+        if !self.sprint_name_patterns.is_empty() {
+            pullboard_core::config::validate_sprint_patterns(&self.sprint_name_patterns)?;
+        }
+        Ok(())
     }
 }
 
@@ -171,6 +181,38 @@ pub fn jira_cloud_url(value: &str) -> Result<String, String> {
 mod tests {
     use super::*;
     #[test]
+    fn repeatable_board_and_pattern_flags_preserve_order_and_never_split_regex_commas() {
+        let args = Cli::try_parse_from([
+            "setup",
+            "--jira-board-id=14585",
+            "--jira-board-id",
+            "11235",
+            "--jira-sprint-name-pattern=SSSD-IDENTITY",
+            "--jira-sprint-name-pattern",
+            "^CORE[0-9]{1,3}$",
+        ])
+        .unwrap()
+        .jira;
+        args.validate().unwrap();
+        assert_eq!(args.board_ids, [14585, 11235]);
+        assert_eq!(
+            args.sprint_name_patterns
+                .iter()
+                .map(SprintPattern::as_str)
+                .collect::<Vec<_>>(),
+            ["SSSD-IDENTITY", "^CORE[0-9]{1,3}$"]
+        );
+        for count in [100, 101] {
+            let mut argv = vec!["setup".to_owned()];
+            for id in 1..=count {
+                argv.push(format!("--jira-board-id={id}"));
+                argv.push(format!("--jira-sprint-name-pattern=Team{id}"));
+            }
+            let args = Cli::try_parse_from(argv).unwrap().jira;
+            assert_eq!(args.validate().is_ok(), count == 100);
+        }
+    }
+    #[test]
     fn both_clap_forms_and_display_preferences() {
         for args in [
             vec!["setup", "--jira-cloud-url=https://example.atlassian.net"],
@@ -234,10 +276,10 @@ mod tests {
             assert_eq!(args.url.as_deref(), Some("https://example.atlassian.net"));
             assert_eq!(args.projects.unwrap().0, ["TWO", "ONE"]);
             assert_eq!(args.groups.unwrap().0, ["developers", "platform team"]);
-            assert_eq!(args.board_id, Some(42));
+            assert_eq!(args.board_ids, [42]);
             assert_eq!(args.team_field.as_deref(), Some("AssignedTeam"));
             assert_eq!(args.team.as_deref(), Some("Team A"));
-            assert_eq!(args.sprint_name_pattern.unwrap().as_str(), "(?i)^Team A ");
+            assert_eq!(args.sprint_name_patterns[0].as_str(), "(?i)^Team A ");
         }
         let args = Cli::try_parse_from(["setup", "--jira-team=Team A"])
             .unwrap()
@@ -248,12 +290,14 @@ mod tests {
     #[test]
     fn rejects_missing_empty_and_repeated_team_flags_and_conflicting_url_modes() {
         for (flag, value) in TEAM_FLAGS {
-            for argv in [
-                vec!["setup", flag],
-                vec!["setup", flag, ""],
-                vec!["setup", flag, value, flag, value],
-            ] {
+            for argv in [vec!["setup", flag], vec!["setup", flag, ""]] {
                 assert!(Cli::try_parse_from(argv).is_err(), "{flag}");
+            }
+            let repeated = Cli::try_parse_from(["setup", flag, value, flag, value]);
+            if matches!(flag, "--jira-board-id" | "--jira-sprint-name-pattern") {
+                assert!(repeated.unwrap().jira.validate().is_err());
+            } else {
+                assert!(repeated.is_err());
             }
         }
         assert!(

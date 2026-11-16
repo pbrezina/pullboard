@@ -73,7 +73,7 @@ and may contain unreleased changes. To use a published image, replace
 ## Manual YAML and container
 
 Create `config/local.yaml` in your editor with the configuration below. Replace
-the Jira URL, email, project, board, team, sprint pattern and tokens with your
+the Jira URL, email, project, boards, team, sprint patterns and tokens with your
 own values. Keep test mode on while setting things up: Jira writes are simulated,
 not sent. Use literal tokens or a supported OS keyring reference, never environment
 variables, and do not commit secrets. `config/local.yaml` is Git-ignored.
@@ -98,9 +98,9 @@ jira:
   email: you@example.com
   token: {value: REPLACE_WITH_JIRA_TOKEN}
   projects: [PROJECT_KEY]
-  board_id: 1
+  board_ids: [42, 43]  # first is My board; use real board IDs
   team: Your team
-  sprint_name_pattern: 'TEAM'
+  sprint_name_patterns: ['TEAM', 'OTHER'] # first is My sprint pattern
 
 forges:
   - id: github
@@ -108,6 +108,11 @@ forges:
     base_url: https://api.github.com
     token: {value: REPLACE_WITH_READ_ONLY_GITHUB_TOKEN}
 ```
+
+Both lists require 1–100 unique entries; a one-entry list is fine. The first board
+and pattern determine current sprints without fallback. All boards supply board
+filters; any pattern permits a creation sprint choice. New tickets start No sprint.
+Existing singular keys must be [replaced, not retained](configuration.md#migrate-singular-sprint-settings).
 
 Save with owner-only permissions, then run the published image with rootless
 Podman on Linux. Replace `:latest` with `:nightly` for development builds; see the

@@ -21,8 +21,11 @@ clone-state/duplicate search are included.
    or workflow mappings. Task is the built-in type suggestion; an unavailable type
    remains unselected with guidance. Review choices exclude self. Team is a
    discovered select choice, not free text; team and sprint stay independently editable.
-   All returned active/future sprints remain offered, regardless of name pattern or
-   origin board, grouped Active/Future. Optional blanks are normal, not warnings;
+   Sprint choices include active/future names matching **any** pattern in the committed
+   options generation across all configured boards, grouped Active/Future. This applies
+   to both purposes and upstream clones; no team-dependent filtering or origin-board
+   traversal occurs. Unmatched sprints remain in board filters and existing assignments,
+   not creation choices. Optional blanks are normal, not warnings;
    Jira-required values need explicit input. Valid edits and deliberate nulls survive
    option refreshes. Status is a discovered project/type dropdown, not free text;
    ambiguous names cannot be selected. Workflow suggestions remain metadata, not
@@ -50,7 +53,8 @@ with a quiet note and **Refresh Jira choices** action. Choice readiness/freshnes
 from `SyncStatus.jira_options`, independently of ticket health: fresh cards do not mean
 creation is ready. Without a verified complete initial generation creation stays blocked,
 not fabricated empty choices or optimistic assignments. Each options generation includes
-its own sprints and effective policy; validation never borrows newer board sprints.
+its own complete multi-board sprint snapshot and effective pattern/group/default
+policy; inclusion and validation never use live YAML or borrow newer board sprints.
 Background publications preserve dialog edits and captured mode revisions, never submit
 automatically.
 

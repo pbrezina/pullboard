@@ -11,11 +11,16 @@ is read-only; Jira changes happen only when you review and submit them.
 PullBoard is one container: a Rust backend serves the API and the Angular app from
 its built-in HTTP server. No separate frontend service is needed.
 
-The header shows your first configured Jira project and matching active sprints.
+The header shows your first configured Jira project and active sprints returned by
+your first board that match your first sprint pattern, with no fallback.
 Overview (Upstream Pull Requests) selects a sprint automatically only when exactly
 one matches; attention starts broad, including unscheduled work. New tickets start **Unassigned**,
 **No sprint** and **Jira default — no transition**. See the
 [dashboard](docs/src/attention.md) and [ticket guide](docs/src/tickets-ai.md).
+
+Jira uses ordered `board_ids` and `sprint_name_patterns` lists (1–100 unique entries
+each), replacing the removed singular keys. All boards supply sprint filters;
+creation choices match any committed pattern. See [configuration and migration](docs/src/configuration.md#migrate-singular-sprint-settings).
 
 Refresh publishes each complete source's cards as soon as ready, without waiting
 for slower sources or Jira creation choices. Jira choices have separate health and

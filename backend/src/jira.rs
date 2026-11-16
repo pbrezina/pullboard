@@ -209,6 +209,8 @@ fn sort_assignees(pool: &mut [JiraAssignee]) {
 
 impl Jira {
     pub async fn new(config: &JiraConfig, limits: &Upstream) -> anyhow::Result<Arc<Self>> {
+        crate::config::validate_board_ids(&config.board_ids)?;
+        crate::config::validate_sprint_patterns(&config.sprint_name_patterns)?;
         Ok(Arc::new(Self {
             config: config.clone(),
             client: http_client(limits)?,
@@ -437,6 +439,11 @@ impl Jira {
                 sprints
             )?;
             metadata.sprints = (*sprints).clone();
+            metadata.allowed_sprint_ids = sprints
+                .iter()
+                .filter(|s| self.config.allows_sprint(&s.name))
+                .map(|s| s.id.clone())
+                .collect();
             progress.metadata_completed();
             Ok::<_, Error>(metadata)
         };
@@ -833,52 +840,60 @@ impl Jira {
     }
     pub async fn sprints(&self) -> Result<Vec<Sprint>> {
         let mut out = vec![];
-        let pattern = self.config.sprint_pattern();
-        let board = self.config.board_id;
-        let mut start = 0;
-        for page in 0..self.limits.max_pages {
-            let response: SprintPage = self
-                .get(
-                    &format!("rest/agile/1.0/board/{board}/sprint"),
-                    &[
-                        ("state", "active,future".into()),
-                        ("startAt", start.to_string()),
-                        ("maxResults", self.limits.page_size.to_string()),
-                    ],
-                )
-                .await?;
-            let count = u64::try_from(response.values.len()).map_err(|_| Error::upstream())?;
-            if response.start_at != start {
-                return Err(discovery::failed());
-            }
-            for s in response.values {
-                if matches!(s.state.as_str(), "active" | "future") {
-                    out.push(Sprint {
-                        id: s.id.to_string(),
-                        board_id: board,
-                        team: None,
-                        default_eligible: s.state == "active" && pattern.is_match(&s.name),
-                        name: s.name,
-                        state: s.state,
-                        board_url: format!(
-                            "{}/secure/RapidBoard.jspa?rapidView={board}",
-                            self.config.base_url.trim_end_matches('/')
-                        ),
-                        start_at: s.start_date,
-                        end_at: s.end_date,
-                    });
+        let mut seen = BTreeSet::new();
+        // One sequential board queue preserves configured precedence without
+        // multiplying item/request concurrency. Any failed page fails the union.
+        for &board in &self.config.board_ids {
+            let mut start = 0;
+            let mut board_sprint_ids = BTreeSet::new();
+            for page in 0..self.limits.max_pages {
+                let response: SprintPage = self
+                    .get(
+                        &format!("rest/agile/1.0/board/{board}/sprint"),
+                        &[
+                            ("state", "active,future".into()),
+                            ("startAt", start.to_string()),
+                            ("maxResults", self.limits.page_size.to_string()),
+                        ],
+                    )
+                    .await?;
+                let count = u64::try_from(response.values.len()).map_err(|_| Error::upstream())?;
+                if response.start_at != start {
+                    return Err(discovery::failed());
                 }
+                for s in response.values {
+                    if !matches!(s.state.as_str(), "active" | "future")
+                        || !board_sprint_ids.insert(s.id)
+                    {
+                        return Err(discovery::failed());
+                    }
+                    if seen.insert(s.id) {
+                        out.push(Sprint {
+                            id: s.id.to_string(),
+                            board_id: board,
+                            team: None,
+                            default_eligible: self.config.current_sprint(board, &s.state, &s.name),
+                            name: s.name,
+                            state: s.state,
+                            board_url: format!(
+                                "{}/secure/RapidBoard.jspa?rapidView={board}",
+                                self.config.base_url.trim_end_matches('/')
+                            ),
+                            start_at: s.start_date,
+                            end_at: s.end_date,
+                        });
+                    }
+                }
+                if response.is_last {
+                    break;
+                }
+                if count == 0 || response.max_results == 0 || page + 1 == self.limits.max_pages {
+                    return Err(Error::upstream());
+                }
+                start = response.start_at.saturating_add(count);
             }
-            if response.is_last {
-                break;
-            }
-            if count == 0 || response.max_results == 0 || page + 1 == self.limits.max_pages {
-                return Err(Error::upstream());
-            }
-            start = response.start_at.saturating_add(count);
         }
-        out.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| a.board_id.cmp(&b.board_id)));
-        out.dedup_by(|a, b| a.id == b.id && a.board_id == b.board_id);
+        out.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(out)
     }
     /// Explicit refresh-time discovery; API consumers use the committed choices.

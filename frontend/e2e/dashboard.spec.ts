@@ -7,6 +7,7 @@ import {
   draft,
   issue,
   options,
+  orderedSprintScenario,
   person,
   pr,
   sync,
@@ -853,7 +854,8 @@ for (const count of [0, 2]) {
         board_url: 'https://jira.example/secure/RapidBoard.jspa?rapidView=12',
       })),
     });
-    const core = { ...sprint, id: 'core', name: '2026-IDM-SSSD-CORE-S99', default_eligible: false };
+    const scenario = orderedSprintScenario();
+    const core = { ...scenario.core, id: 'core' };
     await page.route('**/api/context', (route) => route.fulfill({ json: current }));
     await page.route('**/api/board', (route) =>
       route.fulfill({
@@ -861,6 +863,8 @@ for (const count of [0, 2]) {
           sprints: [
             ...current.current_sprints,
             core,
+            scenario.secondaryIdentity,
+            scenario.excluded,
             {
               ...sprint,
               id: 'future',
@@ -876,6 +880,8 @@ for (const count of [0, 2]) {
     const header = page.getByRole('region', { name: 'Who am I' });
     await expect(header).toContainText('FIRST / First configured project');
     await expect(header).not.toContainText('CORE');
+    await expect(header).not.toContainText(scenario.secondaryIdentity.name);
+    await expect(header).not.toContainText(scenario.excluded.name);
     await expect(header).not.toContainText('Ownership unknown');
     await expect(header).not.toContainText('Board 12');
     if (count) {
@@ -892,6 +898,10 @@ for (const count of [0, 2]) {
     await expect(page.locator('.jira-card')).toHaveCount(0);
     await expect(filter.locator('option[value="active"]')).toHaveCount(0);
     await expect(filter.locator('optgroup[label="Active"] option[value="core"]')).toHaveCount(1);
+    await expect(
+      filter.locator(`optgroup[label="Active"] option[value="${scenario.secondaryIdentity.id}"]`),
+    ).toHaveCount(1);
+    await expect(filter.locator(`option[value="${scenario.excluded.id}"]`)).toHaveCount(1);
     await expect(filter.locator('optgroup[label="Future"] option')).toContainText(
       'Other team future',
     );

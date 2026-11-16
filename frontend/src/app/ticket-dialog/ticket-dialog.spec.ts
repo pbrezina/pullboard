@@ -14,6 +14,7 @@ import {
   draft,
   foreignMention,
   options,
+  orderedSprintScenario,
   person,
   pr,
   runtimeMode,
@@ -615,7 +616,7 @@ describe('Editable ticket dialog', () => {
     c.model.update((m) => ({ ...m, assignee: 'reviewer' }));
     expect(c.createBlocked()).toBe(false);
   });
-  it('keeps optional unsupported sprint empty without blocking creation or hiding board sprint options', async () => {
+  it('keeps optional unsupported sprint empty without blocking creation or hiding supplied sprint options', async () => {
     const f = await ready();
     const c = f.componentInstance;
     c.loadOptions();
@@ -837,5 +838,74 @@ describe('Editable ticket dialog', () => {
     request.flush(options());
     await f.whenStable();
     expect(f.nativeElement.querySelector('#ticket-assignee').disabled).toBe(false);
+  });
+  it.each(['implementation', 'review'] as const)(
+    'uses only pattern-allowed options, not board inventory/current eligibility, for %s creation',
+    async (purpose) => {
+      const scenario = orderedSprintScenario(purpose);
+      const store = TestBed.inject(BoardStore);
+      store.board.set(scenario.board);
+      store.context.set(scenario.context);
+      TestBed.inject<TicketDialogData>(DIALOG_DATA).purpose = purpose;
+      const f = TestBed.createComponent(TicketDialog);
+      http.expectOne('/api/ticket-drafts').flush(draft(purpose));
+      http.expectOne((r) => r.url === '/api/jira/options').flush(scenario.options);
+      await f.whenStable();
+      const c = f.componentInstance;
+      const select = f.nativeElement.querySelector('#ticket-sprint') as HTMLSelectElement;
+      expect(c.model()).toMatchObject({ sprint: '', assignee: '', status: '' });
+      expect(Array.from(select.options, (o) => o.value)).toEqual([
+        '',
+        ...scenario.options.sprints.map((s) => s.id),
+      ]);
+      expect(
+        select.querySelector<HTMLOptionElement>('optgroup[label="Future"] option')?.value,
+      ).toBe(scenario.future.id);
+      c.model.update((m) => ({ ...m, sprint: scenario.excluded.id }));
+      c.save(new Event('submit'));
+      http.expectNone('/api/jira/issues');
+      expect(c.fieldErrors().sprint).toBe('Select an available sprint.');
+      c.model.update((m) => ({ ...m, sprint: scenario.core.id, title: 'Keep explicit CORE' }));
+      store.board.set({
+        ...scenario.board,
+        revision: 2,
+        sprints: [scenario.primary, scenario.excluded],
+      });
+      store.context.set({ ...scenario.context, current_sprints: [] });
+      store.sync.set({ ...sync('syncing'), board_revision: 2 });
+      await f.whenStable();
+      http.expectNone((r) => r.url === '/api/jira/options');
+      c.loadOptions();
+      http.expectOne((r) => r.url === '/api/jira/options').flush(scenario.options);
+      await f.whenStable();
+      expect(select.value).toBe(scenario.core.id);
+      expect(c.model().title).toBe('Keep explicit CORE');
+      expect(c.review.captured()).toEqual(runtimeMode());
+      expect(c.selectionErrors()).toEqual([]);
+      c.save(new Event('submit'));
+      const request = await vi.waitFor(() => http.expectOne('/api/jira/issues'));
+      expect(request.request.body).toMatchObject({
+        purpose,
+        sprint_id: scenario.core.id,
+        expected_mode_revision: 'mode-test-1',
+      });
+      request.flush({ outcome: 'simulated', issue: null, message: 'Simulated.', warnings: [] });
+      await f.whenStable();
+    },
+  );
+  it('does not fall back to board sprints when the committed creation pattern policy allows none', async () => {
+    const scenario = orderedSprintScenario();
+    TestBed.inject(BoardStore).board.set(scenario.board);
+    const f = TestBed.createComponent(TicketDialog);
+    http.expectOne('/api/ticket-drafts').flush(draft());
+    http
+      .expectOne((r) => r.url === '/api/jira/options')
+      .flush({ ...scenario.options, sprints: [] });
+    await f.whenStable();
+    const select = f.nativeElement.querySelector('#ticket-sprint') as HTMLSelectElement;
+    expect(Array.from(select.options, (o) => o.value)).toEqual(['']);
+    expect(f.componentInstance.model().sprint).toBe('');
+    expect(f.componentInstance.selectionErrors()).toEqual([]);
+    expect(f.componentInstance.createBlocked()).toBe(false);
   });
 });

@@ -147,7 +147,7 @@ admitted simulations stay zero-write after switching Live. Stale requests must f
 before upstream calls, without automatic replay; preserve the accepted-create/unknown-key
 success safeguard and disconnected-outcome duplicate protection.
 
-Contract 1.6 refresh/choice-cache fixtures cover independent atomic source and options
+Contract 1.7 preserves refresh/choice-cache fixtures covering independent atomic source and options
 publication, early real first-project/sprint context, initial readiness versus genuinely
 empty pools, each domain's complete last-good retention, failed-commit isolation,
 principal/service/config quarantine in both domains and policy changes only at successful
@@ -173,6 +173,23 @@ The mocked `frontend/e2e/ticket-first-refresh.spec.ts` exercises independent cre
 readiness and accessible concurrent group/project progress in light/dark themes,
 preserving the compact Source health disclosure; it is not live tenant or performance
 verification.
+
+Ordered-sprint fixtures cover required 1–100 unique board/pattern entries, singular-key
+rejection, complete multi-board pagination and deterministic first-board provenance,
+first-board/first-pattern current matches without fallback, and any-pattern creation
+choices independent of team. Retained options keep their own full sprint snapshot and
+pattern policy rather than borrowing live YAML or newer display sprints. Focused
+mock checks (not live tenant verification):
+
+```sh
+toolbox run -c tb-devel cargo test --manifest-path backend/Cargo.toml --locked --offline --test ordered_sprints
+toolbox run -c tb-devel cargo test --manifest-path crates/pullboard-core/Cargo.toml --locked --offline --test ordered_sprints
+cd frontend && npx playwright test e2e/ordered-sprints.spec.ts --reporter=dot
+```
+
+The offline launcher tests also verify repeated board/pattern flags are forwarded in
+order without splitting regex commas or evaluating shell content; other flags remain
+single-use. Run `make test-scripts` after changing launcher behavior or help.
 
 Focused cache verification uses localhost mocks, no credentials:
 
@@ -208,8 +225,9 @@ belong in measurement reports.
 ### Measured local refresh example
 
 This historical comparison predates contract 1.4's complete refresh-time choice
-discovery, v1.5 independent publications and v1.6 ticket-favoring concurrency. It is
-**not a measurement of the current implementation or evidence of a v1.6 speedup**.
+discovery, v1.5 independent publications, v1.6 ticket-favoring concurrency and v1.7
+ordered boards/patterns. It is **not a measurement of the current implementation
+or evidence of a speedup from those changes**.
 An authorized live comparison on 2026-11-09 used the then-default limits with one Jira
 source and one GitHub source: 60 unique Jira candidates and 14 PRs, producing
 49 Jira cards, 14 PR cards and 7 sprints.

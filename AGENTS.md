@@ -48,17 +48,25 @@ their assigned directories, preserve other work, and report actual tests and lim
 - Required Attention has Jira mentions, requested reviews/mentions, and own PR feedback.
   Sort by oldest unanswered event. Overview has assigned Jira issues and own open PRs,
   sorted by title. Reviewer/assignee lists exclude self for PR display and sort ascending.
-- Jira selectors include all active/future sprints and no sprint. PR selectors include
+- Jira board filters include all collected active/future sprints and no sprint. PR selectors include
   all forges and each instance. Both have case-insensitive title filters, independent
   per tab; show filtered and total attention counts. Persist display preferences only.
 - Who-am-I shows verified identities and the discovered first YAML Jira project's real
   key/name (or unavailable), never a hardcoded project or a later-project fallback.
-  Current sprints are only pattern-matching active sprints, with end dates and links
+  Current sprints are only first-board/first-pattern matching active sprints, with end dates and links
   formed by setting selectedSprint on the trusted board_url. Show no-match/ambiguity
-  explicitly; all board-returned active/future sprints remain selectable, grouped by state.
-- `sprint_name_pattern` is a bounded Rust regex search, case-sensitive unless inline
+  explicitly; header links use the first board. Board filters retain all collected sprints;
+  creation choices include only names matching any configured pattern, grouped by state.
+- `board_ids` and `sprint_name_patterns` are nonempty ordered unique lists (1–100 entries);
+  first means mine, as with projects. Collect all boards, deduplicate by sprint ID with
+  first-configured-board provenance; never follow originBoardId. Boards/patterns are
+  independent, not positional pairs. Only primary-board/primary-pattern active matches
+  determine defaults; no additional-board/pattern fallback. Estimation uses the first board.
+  Each pattern is a bounded Rust regex search, case-sensitive unless inline
   flags change it; anchors are optional. No percent-token substitutions or legacy modes.
-  Compile once on parsing; matching affects defaults only, never sprint availability.
+  Compile once on parsing; creation inclusion/validation uses the committed options
+  generation's pattern policy and complete sprint snapshot, never live YAML/newer cards.
+  Matching never filters tickets, existing assignments, Attention or board filters.
 - Setup-generated YAML defaults to Live after an explicit Test-mode question; preserve
   the existing setting on edit. The backend's omitted-property default stays Test.
   Setup never writes upstream; optional synthetic AI tests need explicit billable consent.

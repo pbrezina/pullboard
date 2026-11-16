@@ -171,10 +171,12 @@ sys.exit(int(os.environ['MOCK_EXIT']))
             ('--jira-url', 'https://example.atlassian.net'),
             ('--jira-projects', 'TWO, ONE,TWO'),
             ('--jira-board-id', '42'),
+            ('--jira-board-id', '43'),
             ('--jira-groups', 'engineering,platform team'),
             ('--jira-team-field', 'Assigned Team'),
             ('--jira-team', 'Platform Team'),
             ('--jira-sprint-name-pattern', r'(?i)^Platform \d+ $'),
+            ('--jira-sprint-name-pattern', r'^Other[0-9]{1,3}$'),
         ]
         for equals in [False, True]:
             with self.subTest(equals=equals):
@@ -188,9 +190,11 @@ sys.exit(int(os.environ['MOCK_EXIT']))
     def test_bash_stdin_launcher_restores_tty_and_preserves_team_arguments(self):
         marker = self.directory / 'injected'
         arguments = ['--jira-url=https://example.atlassian.net', '--jira-projects=DEV,OPS',
-                     '--jira-board-id=42', '--jira-groups=engineering,reviewers',
+                     '--jira-board-id=42', '--jira-board-id', '43',
+                     '--jira-groups=engineering,reviewers',
                      '--jira-team-field=AssignedTeam', '--jira-team', 'Platform Team',
-                     '--jira-sprint-name-pattern', f'^Team $(touch "{marker}")']
+                     '--jira-sprint-name-pattern', f'^Team $(touch "{marker}")',
+                     '--jira-sprint-name-pattern=^Other[0-9]{1,3}$']
         result = self.launch(*arguments, shell='bash', piped=True)
         self.assertEqual(result.returncode, 0, result.stdout)
         executed = json.loads(self.result.read_text())
@@ -199,12 +203,14 @@ sys.exit(int(os.environ['MOCK_EXIT']))
         self.assertFalse(marker.exists())
         self.assert_cleaned()
 
-    def test_team_jira_options_reject_missing_empty_repeated_and_conflicting_flags(self):
+    def test_team_jira_options_reject_missing_empty_and_conflicting_flags(self):
         flags = ['--jira-url', '--jira-projects', '--jira-board-id', '--jira-groups',
                  '--jira-team-field', '--jira-team', '--jira-sprint-name-pattern']
         for flag in flags:
-            for arguments in [(flag,), (flag + '=',), (flag, '--nightly'),
-                              (flag, ''), (flag + '=value', flag, 'value')]:
+            invalid = [(flag,), (flag + '=',), (flag, '--nightly'), (flag, '')]
+            if flag not in ['--jira-board-id', '--jira-sprint-name-pattern']:
+                invalid.append((flag + '=value', flag, 'value'))
+            for arguments in invalid:
                 with self.subTest(arguments=arguments):
                     result = self.launch(*arguments, terminal=False)
                     self.assertNotEqual(result.returncode, 0)
@@ -212,6 +218,17 @@ sys.exit(int(os.environ['MOCK_EXIT']))
         for arguments in [('--jira-url=a', '--jira-cloud-url=b'),
                           ('--jira-cloud-url=a', '--jira-url=b')]:
             self.assertNotEqual(self.launch(*arguments, terminal=False).returncode, 0)
+        self.assertFalse(self.requests.exists())
+        self.assertFalse(self.result.exists())
+
+    def test_repeatable_jira_options_still_require_each_value(self):
+        for flag, value in [('--jira-board-id', '42'),
+                            ('--jira-sprint-name-pattern', '^Team[0-9]{1,3}$')]:
+            for suffix in [(flag,), (flag + '=',), (flag, ''), (flag, '--nightly')]:
+                with self.subTest(flag=flag, suffix=suffix):
+                    result = self.launch(flag, value, *suffix, terminal=False)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('nonempty value', result.stderr)
         self.assertFalse(self.requests.exists())
         self.assertFalse(self.result.exists())
 
@@ -272,6 +289,9 @@ sys.exit(int(os.environ['MOCK_EXIT']))
         result = self.launch('--help', terminal=False)
         self.assertEqual(result.returncode, 0)
         self.assertIn('--nightly', result.stdout)
+        self.assertIn('My board first', result.stdout)
+        self.assertIn('My pattern first', result.stdout)
+        self.assertIn('never comma-split', result.stdout)
         for arguments in [('--token=DO_NOT_ECHO',), ('--jira-cloud-url',),
                           ('--jira-cloud-url=',), ('--jira-cloud-url', '--nightly')]:
             with self.subTest(arguments=arguments):

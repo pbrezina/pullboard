@@ -1,4 +1,4 @@
-# PullBoard REST contract — v1.6.0 (ticket-favoring concurrent refresh)
+# PullBoard REST contract — v1.7.0 (ordered sprint boards and patterns)
 
 The normative machine-readable schemas are in [openapi.json](openapi.json).
 All paths are same-origin under `/api`, JSON uses `snake_case`, IDs are opaque strings
@@ -6,10 +6,10 @@ All paths are same-origin under `/api`, JSON uses `snake_case`, IDs are opaque s
 explicitly as `null`. Arrays are always present (possibly empty). Unknown request
 fields are rejected. Error responses use `ErrorResponse` even for routing, extraction,
 validation and upstream errors. No endpoint returns secrets or raw upstream errors.
-This extends v1.5.0 with concurrent ticket, creation-metadata and group discovery,
-and membership-gated eligibility that favors unfinished card work. The minor version
-bump records new valid progress-state combinations, not new fields, phases or counters:
-all wire shapes remain unchanged. Independent per-source card publications, shared
+This extends v1.6.0 with ordered sprint board/pattern configuration and pattern-filtered
+creation choices. The first board and first pattern identify the user's current sprint;
+all boards supply display sprints and all patterns allow creation choices. Wire shapes
+remain unchanged. Ticket-favoring concurrent refresh, independent source publications, shared
 committed `SyncStatus.board_revision`, and separate nullable `SyncStatus.jira_options`
 readiness, health and progress remain. Jira options remain a complete atomic generation,
 uncoupled from card publication, and may commit before tickets. Existing create request
@@ -487,9 +487,14 @@ reset to all forges/repositories and empty text. Filter state is independent per
 PR forge filters use instance `source_id`, not just forge type. Title filters are
 case-insensitive. Attention badges count unfiltered items; show X of Y with filters.
 
-`Board.sprints` and options return **every** active/future sprint returned by the one
-configured board, including foreign-origin and nonmatching names. Context returns
-only active, configured-regex matching sprints (`default_eligible: true`)
+`Board.sprints` returns **every** active/future sprint returned by all configured
+`board_ids`, including foreign-origin and nonmatching names. Fully paginate each board
+under the existing shared transport bounds; never follow `originBoardId`. Deduplicate
+by sprint ID, preferring the first configured board that returned it, independent of
+request completion order. The first board is **my board**, used for header links and
+estimation metadata. The first regex in `sprint_name_patterns` is **my pattern**.
+`default_eligible` is exactly active AND returned by my board AND matching my pattern.
+Context returns only these sprints (`default_eligible: true`)
 in `current_sprints`, sorted by case-insensitive name then opaque ID ascending.
 This is display order, not selection priority. The header shows only these configured
 current sprints, not foreign/nonmatching ones (including CORE nonmatches). With multiple
@@ -500,14 +505,25 @@ refer to the board queried, not the origin board or a claim of ownership. Never 
 another board using `originBoardId`. `Sprint.team` is a reliably discovered ownership
 display name, otherwise null; neither configured team, name pattern nor membership
 of a board proves ownership. `team` here is not a ticket team selection key.
-`default_eligible` is exactly active AND configured regex search match; future sprints are
-always false. It restricts defaults only, never availability, issue discovery or
-attention. No matching active sprint is an empty `current_sprints` array; display it
+Future sprints and sprints returned only by additional boards are never default eligible,
+even if they match my pattern. No fallback to another board/pattern is permitted.
+`JiraOptions.sprints` is the subset of its own complete committed multi-board sprint
+snapshot whose names match **any** committed pattern. Boards and patterns are independent
+lists, not positional pairs. This filtering applies to creation choices and final
+submission validation only, never ticket discovery, existing sprint assignments, board
+filters or Attention. Creation always starts No sprint. No matching active sprint is
+an empty `current_sprints` array; display it
 explicitly rather than guessing a sprint. `profile_url` may be null. Board links use
 the trusted HTTP(S) `board_url`. For a sprint view, parse that URL and set its
 `selectedSprint` query parameter to the actual opaque sprint ID, preserving the board
 path and other query parameters (including `rapidView`). Never concatenate unescaped
 query values or infer another board. No additional sprint URL field is needed.
+
+The paired [display snapshot](examples/board-ordered-sprints.json) and
+[creation options](examples/options-implementation.json) illustrate
+`board_ids: [14585, 11235]`, `sprint_name_patterns: ['SSSD-IDENTITY', 'SSSD-CORE']`:
+UAH stays in board filters but is absent from creation choices; CORE from the secondary
+board is selectable without becoming a current sprint. These are mock fixtures.
 
 ## Upstream issues and deterministic Jira cloning (normative)
 
@@ -706,8 +722,8 @@ is deliberately absent from the board fixture and remains valid through draft/cr
    **Jira default / no transition** (`assignee_id`, `sprint_id`, `suggested_status`
    all null), regardless of current sprint, self identity or workflow mapping.
    User edits title/description/project/type/story points/assignee/sprint/team/status.
-   `/jira/options` supplies discovered permitted issue types, team choices, all
-   board-returned active/future sprints, eligible assignees, purpose defaults and
+   `/jira/options` supplies discovered permitted issue types, team choices, pattern-matching
+   active/future sprints, eligible assignees, purpose defaults and
    selected-type capabilities. Switching project, purpose or type reloads relevant
    options from cache. Load the complete assignee list with omitted/empty `query`
    before enabling the dialog's selector, then filter locally by name/username/email
@@ -821,7 +837,7 @@ upstream type and cache that type's status IDs/names. Do not use issue transitio
 or Jira-wide statuses as the project/type choice inventory. Status inventory is
 **not proof of a permitted transition** for a not-yet-created issue.
 
-Publish choices, their effective project/group policy and their own sprint snapshot
+Publish choices, their effective project/group/sprint-pattern policy and their own complete sprint snapshot
 atomically, separately from cards. A failed required options read/page fails only the
 options domain, preserves the complete same-scope last-good cache and marks
 `jira_options.health` error/backoff; never publish an empty,
@@ -902,7 +918,9 @@ empty type inventory is a valid 200 blocked response, not pending metadata.
   cleared by the user; unsupported required team adds a create blocker.
 - Ticket creation never derives a sprint default from `default_eligible`: no, one
   or multiple matching active sprints all produce null without a missing/ambiguous
-  sprint-default diagnostic. All returned sprints remain visible for explicit selection;
+   sprint-default diagnostic. Only sprints matching any pattern in the committed
+   generation are returned as creation choices; no live-YAML or newer-board filtering.
+   All returned choices remain visible for explicit selection;
   capability may disable submission of a non-null sprint. Team/sprint are independent:
   no filtering, default inference, reset, ownership assertion or validation tying
   a team choice to a sprint. Required sprint values still require explicit selection.
@@ -980,7 +998,7 @@ discovery claims or runtime defaults:
 |---|---|
 | [Implementation](examples/options-implementation.json) | Task/null; eligible self retained but not selected; No sprint, CORE/future still available, ownership unknown; status choices cached. Assumes Sprint is actually on the create screen. |
 | [Review / multiple active sprints](examples/options-review-ambiguous.json) | Task/null; self excluded; two matching active sprints, null creation default, no editor warning. Header explains ambiguity; Overview initially/reset requires an explicit sprint choice, with no automatic selection or all-sprints fallback. |
-| [Missing create Sprint](examples/options-sprint-unsupported.json) | All board sprints remain visible; absent Sprint create field and no implemented follow-up yields unsupported, null sprint default, non-null submission rejected. Creating with null is still possible. |
+| [Missing create Sprint](examples/options-sprint-unsupported.json) | All pattern-allowed sprints remain visible; absent Sprint create field and no implemented follow-up yields unsupported, null sprint default, non-null submission rejected. Creating with null is still possible. |
 | [Explicit Story type](examples/options-story.json) | Different per-type status inventory; same complete assignee/sprint pools; optional missing team remains null without warnings. |
 
 The second example uses a separate two-matching-active-sprints fixture; it is not
@@ -1035,8 +1053,10 @@ runtime override is the sole exception to YAML controlling the current action mo
 ### Frozen policy-only YAML shape
 
 When Jira is enabled, `projects` is a nonempty unique array of project-key strings;
-`board_id` (positive integer), `team` (nonempty semantic default name), and
-`sprint_name_pattern` are **required with no defaults**. Optional `team_field_name`
+`board_ids` (1–100 unique positive integers), `team` (nonempty semantic default name),
+and `sprint_name_patterns` (1–100 unique bounded regex strings) are **required with no
+defaults**. List order is preserved; the first board/pattern is mine. Singular
+`board_id`/`sprint_name_pattern` configuration keys are rejected. Optional `team_field_name`
 is an exact semantic field name, default `AssignedTeam`; never accept `customfield_*`
 or another raw field ID as a selector. No configured identities/display names,
 project names/type inventories, custom field IDs, team option/UUID inventories,
@@ -1045,14 +1065,17 @@ without echoing their values. Retain Jira Basic-auth `email`, URL and credential
 Forge `id` remains stable; optional `name` defaults to that ID; remove forge `account`
 metadata. No username/account ID is needed in YAML for any service.
 
-`sprint_name_pattern` is always a Rust regular expression, searched anywhere in the
+Each `sprint_name_patterns` entry is a Rust regular expression, searched anywhere in the
 sprint name, case-sensitive by default. Users can add anchors for whole-name matching
 or inline flags such as `(?i)`. A plain `SSSD-IDENTITY` searches for that substring;
 regex metacharacters retain their regex meaning. No `%YEAR`/`%NUMBER` substitutions,
 prefix modes or legacy interpretation remain. Reject blank/invalid expressions and
 patterns exceeding 4096 UTF-8 bytes; bound compiled regex size and compile once per
-configuration load. Regex matching affects current-sprint defaults only, never the
-inventory, discovered issues, Attention or new-ticket sprint selection.
+configuration load. The first pattern controls primary-board current-sprint defaults;
+all patterns control creation-choice inclusion. No pattern affects discovered tickets,
+Attention, existing assignments or the full display sprint inventory. Ordered board
+IDs belong to cache scope; pattern policy takes effect with each successful domain
+publication, and retained options keep their own committed pattern policy.
 Optional `assignee_groups` is an array of nonempty semantic names, deduplicated by
 exact name; absent/empty has the unrestricted project-assignable meaning above.
 
@@ -1076,9 +1099,9 @@ sync never applies it. This scope intentionally does not add multi-Jira or board
 
 ```yaml
 projects: [IDM]
-board_id: 14585
+board_ids: [14585, 11235]
 team: rhel-idm-sssd-identity
-sprint_name_pattern: 'SSSD-IDENTITY'
+sprint_name_patterns: ['SSSD-IDENTITY', 'SSSD-CORE']
 assignee_groups: [rhel-sst-idm-sssd]
 defaults:
   implementation: {issue_type: Task, assignee: null}
@@ -1105,6 +1128,14 @@ Jira or forges. Optional AI inference testing needs explicit consent and synthet
 content. Tokens are never CLI/environment inputs or summary/log output.
 `--jira-cloud-url` is an editable HTTPS tenant-root prefill, not a second persistent
 configuration source or permission to send retained credentials to a changed site.
+Setup manages an ordered multi-board selection and ordered regex list, explicitly
+choosing My board/My sprint pattern first, as with the primary project. Every selected
+board is verified with the current connection; manual same-tenant board ID/URL entry
+remains available, and broader selected-project board lookup still requires confirmation.
+Preview current matches and included/excluded active/future creation choices. Preserve
+saved lists on edit and invalidate cached setup sprint metadata when boards change.
+Repeatable `--jira-board-id` and `--jira-sprint-name-pattern` arguments preserve supplied
+order; never comma-split regex arguments. Supplied values bypass prompts, not verification.
 
 Host defaults bind loopback; container YAML may bind `0.0.0.0:8080` with host
 publishing `127.0.0.1:3333:8080` by default. No forge write capability exists in the

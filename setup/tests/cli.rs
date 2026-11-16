@@ -55,6 +55,35 @@ fn invalid_destinations_and_credentials_arguments_fail_before_tui() {
 }
 
 #[test]
+fn duplicate_or_overlong_ordered_lists_fail_before_terminal_or_config_access_without_values() {
+    let secret = "SYNTHETIC_REVIEW_SECRET";
+    for args in [
+        vec![
+            "--jira-board-id=7".to_owned(),
+            "--jira-board-id=7".to_owned(),
+        ],
+        vec![
+            format!("--jira-sprint-name-pattern={secret}"),
+            format!("--jira-sprint-name-pattern={secret}"),
+        ],
+        (1..=101)
+            .map(|id| format!("--jira-board-id={id}"))
+            .collect(),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let output = binary()
+            .env("HOME", home.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+        assert_eq!(home.path().read_dir().unwrap().count(), 0);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unique ordered"));
+    }
+}
+
+#[test]
 fn rejected_argument_values_never_echo_accidental_credentials() {
     const SECRET: &str = "SYNTHETIC_REVIEW_SECRET";
     for url in [

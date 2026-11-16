@@ -143,6 +143,7 @@ def sync_invariants(value):
 
 
 def board_invariants(value):
+    sprint_invariants(value["sprints"])
     sources = {source["source_id"]: source for source in value["sources"]}
     if len(sources) != len(value["sources"]):
         raise ValueError("Board source IDs must be unique")
@@ -165,7 +166,15 @@ def sorted_unique_choices(choices):
         raise ValueError("Choices must sort by case-insensitive name then opaque ID")
 
 
+def sprint_invariants(sprints):
+    if len({sprint["id"] for sprint in sprints}) != len(sprints):
+        raise ValueError("Sprint IDs must be unique across all configured boards")
+    if any(sprint["default_eligible"] and sprint["state"] != "active" for sprint in sprints):
+        raise ValueError("Future sprints cannot be current-sprint defaults")
+
+
 def context_invariants(value):
+    sprint_invariants(value["current_sprints"])
     projects = value["jira_projects"]
     keys = [project["key"] for project in projects]
     if len(set(keys)) != len(keys):
@@ -177,6 +186,7 @@ def context_invariants(value):
 
 
 def options_invariants(value):
+    sprint_invariants(value["sprints"])
     sorted_unique_choices(value["statuses"])
     ids = [assignee["id"] for assignee in value["assignees"]]
     if len(set(ids)) != len(ids):
@@ -400,10 +410,30 @@ reject("DraftRequest", {
 })
 reject("LinkRequest", {**schemas["LinkRequest"]["examples"][0], "upstream_issue_id": manual["id"]})
 
-# Current project is discovered/configured, not a hardcoded key; only matching
-# active sprints enter context while board/options retain every board sprint.
+# Current project is discovered/configured, not a hardcoded key; current sprints
+# use the first board/pattern while creation choices match any committed pattern.
 context = new_examples["Context"]
 options = new_examples["JiraOptions"]
+sprint_board = documents["examples/board-ordered-sprints.json"]
+# This paired mock illustrates board_ids [14585, 11235] and literal regex searches
+# ['SSSD-IDENTITY', 'SSSD-CORE']; it does not execute the Rust regex implementation.
+if options["sprints"] != [
+    sprint for sprint in sprint_board["sprints"]
+    if any(pattern in sprint["name"] for pattern in ("SSSD-IDENTITY", "SSSD-CORE"))
+]:
+    raise ValueError("Creation fixture must include both allowed teams but exclude UAH")
+for sprint in sprint_board["sprints"]:
+    mine = (
+        sprint["board_id"] == 14585 and sprint["state"] == "active"
+        and "SSSD-IDENTITY" in sprint["name"]
+    )
+    if sprint["default_eligible"] != mine:
+        raise ValueError("Only primary-board/primary-pattern matches identify my sprint")
+reject("Board", {**sprint_board, "sprints": sprint_board["sprints"] * 2})
+reject("JiraOptions", {**options, "sprints": options["sprints"] * 2})
+future_default = {**options["sprints"][2], "default_eligible": True}
+reject("Board", {**sprint_board, "sprints": [future_default]})
+reject("JiraOptions", {**options, "sprints": [future_default]})
 expected_current = sorted(
     [sprint for sprint in options["sprints"] if sprint["default_eligible"]],
     key=lambda sprint: (sprint["name"].casefold(), sprint["id"]),

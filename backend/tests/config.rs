@@ -25,7 +25,7 @@ fn separate_instance_ids_are_supported_and_duplicate_ids_rejected() {
 
 #[test]
 fn strict_policy_only_schema_and_forge_name_fallback() {
-    let minimal = "base_url: https://jira.example\nemail: me@example.invalid\ntoken: {value: placeholder}\nprojects: [DEV]\nboard_id: 42\nteam: Platform\nsprint_name_pattern: 'Platform'\n";
+    let minimal = "base_url: https://jira.example\nemail: me@example.invalid\ntoken: {value: placeholder}\nprojects: [DEV]\nboard_ids: [42]\nteam: Platform\nsprint_name_patterns: ['Platform']\n";
     for removed in [
         "account_id: old",
         "display_name: old",
@@ -40,9 +40,9 @@ fn strict_policy_only_schema_and_forge_name_fallback() {
         );
     }
     for required in [
-        "board_id: 42\n",
+        "board_ids: [42]\n",
         "team: Platform\n",
-        "sprint_name_pattern: 'Platform'\n",
+        "sprint_name_patterns: ['Platform']\n",
     ] {
         assert!(
             serde_yaml::from_str::<pullboard::config::JiraConfig>(&minimal.replace(required, ""))
@@ -69,15 +69,12 @@ fn strict_policy_only_schema_and_forge_name_fallback() {
     c.validate().unwrap();
     assert_eq!(c.jira.unwrap().assignee_groups, ["one", "two"]);
     for invalid in [
-        "board_id: 0",
         "team: ' '",
         "team_field_name: customfield_42",
         "team_field_name: '42'",
         "assignee_groups: [' ']",
     ] {
-        let yaml = if invalid.starts_with("board_id") {
-            minimal.replace("board_id: 42", invalid)
-        } else if invalid.starts_with("team:") {
+        let yaml = if invalid.starts_with("team:") {
             minimal.replace("team: Platform", invalid)
         } else {
             format!("{minimal}{invalid}\n")
@@ -115,7 +112,7 @@ fn sprint_regex_rejects_blank_invalid_overlong_and_large_compiled_expressions() 
     assert!(SprintPattern::new(&"a".repeat(4097)).is_err());
     assert!(SprintPattern::new(&"é".repeat(2048)).is_ok());
     assert!(SprintPattern::new(&"é".repeat(2049)).is_err());
-    let yaml = "jira: {base_url: https://jira.example, email: me@example.invalid, token: {value: placeholder}, projects: [DEV], board_id: 1, team: Platform, sprint_name_pattern: '['}";
+    let yaml = "jira: {base_url: https://jira.example, email: me@example.invalid, token: {value: placeholder}, projects: [DEV], board_ids: [1], team: Platform, sprint_name_patterns: ['[']}";
     assert!(serde_yaml::from_str::<Config>(yaml).is_err());
 }
 

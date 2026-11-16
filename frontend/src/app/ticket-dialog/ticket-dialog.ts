@@ -117,6 +117,8 @@ export class TicketDialog {
       (health.status === 'error' || health.status === 'backoff')
     );
   });
+  // Options owns its committed pattern policy/snapshot; never merge Board.sprints or
+  // restrict creation choices to the primary-board current-sprint default_eligible flag.
   readonly sprintGroups = computed(() =>
     ['active', 'future'].map((state) => ({
       label: state === 'active' ? 'Active' : 'Future',

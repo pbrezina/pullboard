@@ -1,12 +1,17 @@
 import { TestBed } from '@angular/core/testing';
 import { FilterBar } from './filter-bar';
-import { board, context, sprint } from '../testing/fixtures';
+import { board, context, orderedSprintScenario, sprint } from '../testing/fixtures';
 describe('Board filter controls', () => {
   it('offers active and future sprints, no sprint, forge instances, and disambiguated repositories', async () => {
     const f = TestBed.createComponent(FilterBar);
     f.componentRef.setInput(
       'board',
-      board({ sprints: [sprint, { ...sprint, id: 'future', state: 'future', name: 'Next' }] }),
+      board({
+        sprints: [
+          sprint,
+          { ...sprint, id: 'future', state: 'future', name: 'Next', default_eligible: false },
+        ],
+      }),
     );
     f.componentRef.setInput('context', context());
     await f.whenStable();
@@ -19,6 +24,29 @@ describe('Board filter controls', () => {
     expect(f.componentInstance.repositories()).toEqual([
       { id: 'work\u001facme\u001fwidget', label: 'github · acme/widget' },
     ]);
+  });
+  it('retains every board sprint, including creation-excluded names, and deliberate choices on publication', async () => {
+    const scenario = orderedSprintScenario();
+    const f = TestBed.createComponent(FilterBar);
+    f.componentRef.setInput('board', scenario.board);
+    f.componentRef.setInput('context', scenario.context);
+    f.componentRef.setInput('filters', {
+      ...f.componentInstance.filters(),
+      sprint: scenario.excluded.id,
+    });
+    await f.whenStable();
+    const select = f.nativeElement.querySelector('.filter-pair select') as HTMLSelectElement;
+    const ids = f.componentInstance.sprints().map((s) => s.id);
+    expect(ids).toHaveLength(scenario.board.sprints.length);
+    expect(ids).toEqual(expect.arrayContaining(scenario.board.sprints.map((s) => s.id)));
+    expect(f.nativeElement.textContent).toContain(scenario.excluded.name);
+    expect(f.nativeElement.textContent).toContain(scenario.core.name);
+    expect(select.value).toBe(scenario.excluded.id);
+    f.componentRef.setInput('board', { ...scenario.board, revision: 2 });
+    f.componentRef.setInput('context', { ...scenario.context, current_sprints: [] });
+    await f.whenStable();
+    expect(select.value).toBe(scenario.excluded.id);
+    expect(f.componentInstance.filters().sprint).toBe(scenario.excluded.id);
   });
   it('clears the other PR scope filter when selecting a forge or repository', () => {
     const f = TestBed.createComponent(FilterBar);

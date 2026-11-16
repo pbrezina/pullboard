@@ -109,23 +109,55 @@ When `jira` is non-null, supply `base_url`, Basic-auth `email`, `token`, and:
 | Key | Rule |
 | --- | --- |
 | `projects` | 1–100 unique selected project-key strings, e.g. `[DEV]`; first project's discovered key/name supplies Current project; no project objects |
-| `board_id` | Required positive integer, **no default**; only this board is queried |
+| `board_ids` | Required ordered list of 1–100 unique positive integers, **no default**; first is **My board** |
 | `team` | Required nonblank semantic default name, **no default**; not sprint ownership |
-| `sprint_name_pattern` | Required nonblank Rust regex search, **no default**, at most 4096 UTF-8 bytes |
+| `sprint_name_patterns` | Required ordered list of 1–100 unique nonblank Rust regex strings, **no default**; first is **My sprint pattern**; at most 4096 UTF-8 bytes each |
 | `team_field_name` | Optional exact semantic field name; defaults to `AssignedTeam`, never a raw field ID |
 | `assignee_groups` | Optional nonblank group names; exact duplicates removed; multiple groups form a union |
 | `defaults` | Optional purpose policies; built-ins are Task/null for both implementation and review |
 | `project_overrides` | Optional selected-project-key map; values accept only `defaults` |
 
-`sprint_name_pattern` is always a Rust regular expression searched anywhere in the
+Each `sprint_name_patterns` entry is a Rust regular expression searched anywhere in the
 sprint name. For example, `'SSSD-IDENTITY'` finds that substring, while
 `'^[0-9]{4}-SSSD-IDENTITY-S[0-9]+$'` requires the entire name to match. Matching is
 case-sensitive unless an inline flag such as `(?i)` changes it. Regex metacharacters
 are significant: use `'Team\.v2'` to match a literal dot. Lookaround and backreferences
 are unsupported. Blank, invalid or oversized expressions fail validation; compiled
-size is bounded. There are no `%YEAR`/`%NUMBER` substitutions or legacy modes.
-Matching controls the header's current active sprints and Overview's unique-sprint
-default only, never which active/future sprints are available or a ticket's initial sprint.
+size is bounded and expressions compile once per configuration load. There are no
+`%YEAR`/`%NUMBER` substitutions or legacy modes.
+
+For example, `board_ids: [42, 43]` and
+`sprint_name_patterns: ['EXAMPLE', 'OTHER']` are **independent ordered lists**, not
+board/pattern pairs. All boards supply their complete active/future sprints,
+deduplicated by sprint ID with the first configured board returning it preferred.
+PullBoard never follows `originBoardId`. The first board supplies header links and
+estimation metadata. Current sprints must be **active, returned by the first board,
+and match the first pattern**; there is no fallback to an additional board or pattern.
+Exactly one current match supplies Overview's initial/reset sprint filter.
+
+Creation choices include sprints from any configured board whose names match **any**
+committed pattern, for implementation, review and upstream cloning alike, independently
+of the selected ticket team. All collected sprints remain in board filters and existing
+assignments; patterns never filter ticket discovery or Attention. Every new editor
+starts No sprint. See [sprint behavior](jira.md#ordered-boards-and-sprint-patterns).
+
+### Migrate singular sprint settings
+
+For contract v1.7.0, replace the removed keys with lists, even when keeping only one value:
+
+```yaml
+board_ids: [42]
+sprint_name_patterns: ['EXAMPLE']
+```
+
+Remove `board_id` and `sprint_name_pattern` entirely; they are rejected, not aliases
+or compatibility fallbacks. Empty, duplicate or over-100 lists are rejected too.
+Keep the existing URL, email, token and unrelated settings unchanged. For additional
+boards/patterns, append values and keep your own board/pattern first. Unlike the old
+defaults-only pattern, the patterns now also restrict creation sprint choices; add
+patterns for every sprint-name family you want offered. Restart after editing.
+
+### Purpose policies and cached choices
 
 Each supplied `defaults.implementation` or `defaults.review` object requires exact
 `issue_type` and explicit `assignee`: implementation accepts `me` or null; review
@@ -137,7 +169,7 @@ both `draft` and `ready`, each a nonblank status suggestion or null. Omit the ob
 rather than writing `workflow: null` or a null purpose. Built-in workflow is null/null.
 
 Project overrides may only name selected projects and override purpose defaults,
-not board/team/pattern/groups/fields. A supplied purpose replaces type/assignee;
+not boards/team/patterns/groups/fields. A supplied purpose replaces type/assignee;
 omitted workflow inherits that purpose's global workflow. Explicit null workflow
 entries clear suggestions. Empty maps change nothing. Workflow suggestions remain
 available in options metadata, not initially selected in the editor. Only an explicit
@@ -147,7 +179,7 @@ Normal Jira refresh discovers complete assignee/type/status/capability choices a
 publishes them with their own sprint snapshot and effective policy in one independent
 atomic options generation, not with cards. Dialogs, drafts and submissions use that
 committed generation, not repeated group/user/metadata discovery or newer board sprints.
-Group/default-policy changes take effect only after successful options publication;
+Group/default/pattern-policy changes take effect only after successful options publication;
 an options failure retains complete same-scope last-good choices as usable but stale
 through independent `jira_options.health` and `jira_options.ready`, not Jira ticket health. No verified
 complete initial cache means creation fails closed; assignments are never optimistic.
@@ -156,7 +188,7 @@ Principal/service/incompatible configuration scope changes quarantine both domai
 
 This is a breaking strict schema: configured forge `account`, Jira `account_id`/
 `display_name`, metadata-rich projects/type inventories, `fields`, `teams` mappings,
-team IDs, sprint inventories/fixed defaults and legacy top-level workflows are
+team IDs, sprint inventories/fixed defaults, singular board/pattern keys and legacy top-level workflows are
 rejected, not optional compatibility settings. Keyring `account` remains a secret
 lookup key, not an upstream identity. See [Jira discovery](jira.md) for capabilities,
 group permissions/request costs and unsupported mechanisms.

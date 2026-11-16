@@ -5,7 +5,7 @@
 `jira.email` and the token provide Basic authentication. The authenticated
 `GET /rest/api/3/myself` discovers the authoritative account ID/display name;
 do not configure either. `projects: [DEV]` selects project keys, not names or type
-inventories. Supply required `board_id`, semantic `team` and `sprint_name_pattern`;
+inventories. Supply required ordered `board_ids`, semantic `team` and ordered `sprint_name_patterns`;
 none has a default. Example names/numbers are sanitized illustrations, not tenant facts.
 
 Configured projects restrict assigned-issue discovery, metadata, ticket creation
@@ -21,12 +21,12 @@ early, without waiting for creation choices or substituting a later project. Its
 issue-type list may remain empty until options metadata commits; project visibility
 is not creation readiness.
 
-Creation discovery follows Jira ticket work, reusing visible fields from ticket
+Creation discovery may overlap Jira ticket work, reusing visible fields from ticket
 preparation and reading selected projects, fully paginated create types and per-type
-create metadata, project/type status inventories, configured-board configuration
+create metadata, project/type status inventories, primary-board configuration
 and project permissions.
 Project names and supported issue types come from those reads. It identifies Sprint
-by the `gh-sprint` schema and numeric Story Points by the board's estimation field,
+by the `gh-sprint` schema and numeric Story Points by the **first board's** estimation field,
 not by guessed field IDs. Missing permissions, incomplete pages and ambiguous field
 or type names fail explicitly, never as a successful empty inventory.
 
@@ -46,25 +46,34 @@ values. Separate **Atlassian Team UUID/string discovery is unsupported**: select
 that field does not turn a select option ID into a Team UUID. Unsupported optional
 fields may be left null; unsupported required fields block creation.
 
-## One configured board, all its active/future sprints
+## Ordered boards and sprint patterns
 
-Choose a real positive board ID from your approved Jira board URL. PullBoard does
-not browse a board inventory. It fully paginates only
-`GET /rest/agile/1.0/board/{board_id}/sprint?state=active,future` and reads configuration
-for that same board. Foreign-origin sprints returned by it remain available; it
-never follows `originBoardId` to query another board.
+Configure 1–100 unique positive `board_ids` and 1–100 unique `sprint_name_patterns`,
+both in deliberate order. The first board is **My board**; the first pattern is
+**My sprint pattern**, just as the first configured project is yours. These lists
+are independent, not positional pairs. Neither has a default. The removed singular
+keys are rejected; see [migration](configuration.md#migrate-singular-sprint-settings).
 
-All returned active/future sprints and no sprint are offered independently of team
-and name pattern, grouped **Active** and **Future** in selectors. Queried board links
-do not prove ownership; current discovery returns sprint `team: null`, not a team
-inferred from configuration or name. Who-am-I shows only pattern-matching active
-sprints, their available end dates and links to the actual sprint on the queried
-board. No match and multiple-match ambiguity are explicit.
+At runtime PullBoard fully paginates
+`GET /rest/agile/1.0/board/{board_id}/sprint?state=active,future` for **every configured
+board** under the existing shared transport bounds. Duplicate sprint IDs prefer the
+earliest configured board returning that sprint, independent of request completion
+order. Foreign-origin sprints remain included; PullBoard never follows `originBoardId`.
+Estimation metadata comes only from the first board. Runtime does not enumerate a
+board inventory; the [setup wizard](setup.md#jira-cloud) can help select boards.
 
-`default_eligible` means **active AND configured Rust regex search match**. A plain
-`SSSD-IDENTITY` searches anywhere; matching is case-sensitive unless inline flags
-change it, and anchors are optional. There are no percent-token substitutions;
-see [configuration](configuration.md). Future/nonmatching sprints remain selectable.
+Board filters offer **every collected active/future sprint**, grouped **Active** and
+**Future**, plus no sprint/all sprints. Neither patterns nor ticket team restrict those
+filters, ticket discovery, existing assignments or Attention. Queried `board_id` and
+`board_url` show provenance, not ownership; sprint `team` is null unless ownership is
+reliably discovered, never inferred from the configured team or name.
+
+`default_eligible` means **active AND returned by the first board AND matching the
+first Rust regex**. A plain `SSSD-IDENTITY` searches anywhere; matching is case-sensitive
+unless inline flags change it, and anchors are optional. There are no percent-token
+substitutions; see [configuration](configuration.md). Who-am-I shows only these current
+matches, their available end dates and links on **My board**. No match and multiple-match
+ambiguity are explicit; an additional board or pattern is never a current-sprint fallback.
 Exactly one match supplies Overview's initial/reset actual sprint ID. Zero or
 multiple matches leave its Jira results empty with an explicit no-current/choose
 state until the user selects a filter; never choose the first/minimum ID, a union
@@ -72,10 +81,16 @@ or all-sprints fallback. Attention defaults all/no sprint. There is no synthetic
 eligible-sprints selector. Deliberate per-tab selections survive refreshes; see
 [filters and reset](attention.md#tabs-and-filters).
 
+**Creation choices** include only collected active/future sprint names matching **any**
+pattern in the committed options generation, grouped **Active** and **Future**. This
+applies to implementation, review and upstream cloning, independently of ticket team;
+it is not restricted to My board or active current matches. Unmatched sprints stay in
+board filters and existing assignments, not creation choices.
+
 **Ticket creation always starts No sprint**, with no missing/ambiguous-sprint-default
-warning, regardless of the number of matches. Required sprint input still needs
-explicit selection. Patterns do not restrict discovery or attention. Team and
-sprint are independently editable: neither filters, resets or validates the other.
+warning, regardless of the number of current matches. Required sprint input still needs
+explicit selection. Team and sprint are independently editable: neither filters,
+resets or validates the other.
 
 ## Assignees: complete candidates, refresh-time checks
 
@@ -145,12 +160,14 @@ not a card barrier. See
 ## Refresh-time choices and freshness
 
 Normal Jira refresh fully discovers every configured project's permitted assignees,
-all allowed types' metadata/capabilities/team choices and statuses, and all board
-active/future sprints. Choices, their **own sprint snapshot** and effective group/default
+all allowed types' metadata/capabilities/team choices and statuses, and all configured
+boards' active/future sprints. Choices, their **own complete sprint snapshot** and effective group/default/pattern
 policy publish as one complete atomic options generation in ephemeral SQLite,
 independently of Jira cards, possibly before tickets. Verified prerequisites/sprint
 reads are reused without waiting for ticket hydration. Validation never merges newer
-board sprints or policy with an old pool. Opening/searching a dialog,
+board sprints or live YAML pattern policy with an old pool. Creation inclusion and
+final validation use that same generation's complete sprint snapshot and regex policy.
+Opening/searching a dialog,
 drafting and create validation consume that cache, never start metadata/group/user
 discovery. AI generation and explicit live write/follow-up requests retain their
 separate purposes.
@@ -173,7 +190,7 @@ only, so fresh tickets can coexist with failed options, or vice versa when prere
 permit. Each domain retains only its own scoped last-good data; scope changes quarantine
 incompatible cards **and** choices immediately. The editor shows a quiet stale-choices
 note and **Refresh Jira choices**; the creation-options panel carries failure details.
-Group and policy changes apply only with the next successful atomic options publication,
+Group and pattern/default policy changes apply only with the next successful atomic options publication,
 never to an old pool alone. The job's last-success time requires all ticket sources and
 options to succeed; a domain failure cannot roll back another successful commit.
 An open editor can keep loaded choices; final validation uses the latest committed
@@ -204,8 +221,8 @@ numeric setter. **If Sprint is absent from create metadata, it is omitted from t
 create body.** Implemented follow-up support independently requires a discovered
 scrum board, visible gh-sprint field and project EDIT_ISSUES + SCHEDULE_ISSUES
 permissions. The selected sprint must appear in the latest committed **options
-generation's** configured-board inventory, not a newer card snapshot; submit does not
-rediscover it.
+generation's** multi-board inventory and match any of that generation's patterns,
+not live YAML or a newer card snapshot; submit does not rediscover it.
 After explicit submit and confirmed creation it uses Jira Software Cloud's documented
 [Move issues to sprint and rank](https://developer.atlassian.com/cloud/jira/software/rest/api-group-sprint/#api-rest-agile-1-0-sprint-sprintid-issue-post):
 `POST /rest/agile/1.0/sprint/{sprintId}/issue`, body `{"issues":["REAL-KEY"]}`,

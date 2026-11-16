@@ -1,4 +1,4 @@
-/** PullBoard v1.5 wire types. Keep in sync with api/openapi.json. */
+/** PullBoard v1.7 wire types. Keep in sync with api/openapi.json. */
 export type ForgeKind = 'github' | 'gitlab' | 'codeberg' | 'forgejo';
 export type SourceKind = ForgeKind | 'jira';
 export type Purpose = 'implementation' | 'review';
@@ -21,10 +21,12 @@ export interface JiraAssignee extends Person {
 }
 export interface Sprint {
   id: string;
+  /** First configured board that returned this sprint, not its origin/owner. */
   board_id: number;
   team: string | null;
   name: string;
   state: 'active' | 'future';
+  /** Current sprint on the primary board/pattern; never a creation-choice filter. */
   default_eligible: boolean;
   board_url: string;
   start_at: string | null;

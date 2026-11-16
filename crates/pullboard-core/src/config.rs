@@ -53,7 +53,21 @@ impl std::str::FromStr for SprintPattern {
 
 impl<'de> Deserialize<'de> for SprintPattern {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Self::new(&String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+        struct PatternVisitor;
+        impl serde::de::Visitor<'_> for PatternVisitor {
+            type Value = SprintPattern;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a bounded sprint regex string")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                SprintPattern::new(value).map_err(E::custom)
+            }
+        }
+        // YAML's deserialize_string coerces numeric/bool scalars to strings.
+        // The policy contract requires actual regex strings, not coercion.
+        deserializer.deserialize_any(PatternVisitor)
     }
 }
 
@@ -234,9 +248,11 @@ pub struct JiraConfig {
     pub email: String,
     pub token: Secret,
     pub projects: Vec<String>,
-    pub board_id: u64,
+    #[serde(deserialize_with = "board_ids")]
+    pub board_ids: Vec<u64>,
     pub team: String,
-    pub sprint_name_pattern: SprintPattern,
+    #[serde(deserialize_with = "sprint_name_patterns")]
+    pub sprint_name_patterns: Vec<SprintPattern>,
     #[serde(default = "team_field_name")]
     pub team_field_name: String,
     #[serde(default, deserialize_with = "group_names")]
@@ -248,6 +264,36 @@ pub struct JiraConfig {
 }
 fn team_field_name() -> String {
     "AssignedTeam".into()
+}
+fn board_ids<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u64>, D::Error> {
+    let values = Vec::<u64>::deserialize(d)?;
+    validate_board_ids(&values).map_err(serde::de::Error::custom)?;
+    Ok(values)
+}
+fn sprint_name_patterns<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Vec<SprintPattern>, D::Error> {
+    let values = Vec::<SprintPattern>::deserialize(d)?;
+    validate_sprint_patterns(&values).map_err(serde::de::Error::custom)?;
+    Ok(values)
+}
+/// Validate an ordered selection without sorting or silently removing duplicates.
+pub fn validate_board_ids(values: &[u64]) -> anyhow::Result<()> {
+    let mut seen = BTreeSet::new();
+    anyhow::ensure!(
+        (1..=100).contains(&values.len()) && values.iter().all(|id| *id > 0 && seen.insert(id)),
+        "Jira requires 1..100 unique positive board IDs"
+    );
+    Ok(())
+}
+/// Patterns are already bounded and compiled; validation never recompiles them.
+pub fn validate_sprint_patterns(values: &[SprintPattern]) -> anyhow::Result<()> {
+    let mut seen = BTreeSet::new();
+    anyhow::ensure!(
+        (1..=100).contains(&values.len()) && values.iter().all(|p| seen.insert(p.as_str())),
+        "Jira requires 1..100 unique sprint patterns"
+    );
+    Ok(())
 }
 fn group_names<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
     Ok(Vec::<String>::deserialize(d)?
@@ -322,8 +368,17 @@ impl JiraConfig {
         }
         policy
     }
-    pub fn sprint_pattern(&self) -> &SprintPattern {
-        &self.sprint_name_pattern
+    /// Only the primary board and primary pattern can identify a current sprint.
+    pub fn current_sprint(&self, board: u64, state: &str, name: &str) -> bool {
+        state == "active"
+            && self.board_ids.first() == Some(&board)
+            && self
+                .sprint_name_patterns
+                .first()
+                .is_some_and(|p| p.is_match(name))
+    }
+    pub fn allows_sprint(&self, name: &str) -> bool {
+        self.sprint_name_patterns.iter().any(|p| p.is_match(name))
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -495,10 +550,9 @@ impl Config {
                     "invalid or duplicate Jira project"
                 );
             }
-            anyhow::ensure!(
-                j.board_id > 0 && !j.team.trim().is_empty(),
-                "Jira board, team and sprint pattern are required"
-            );
+            anyhow::ensure!(!j.team.trim().is_empty(), "Jira team is required");
+            validate_board_ids(&j.board_ids)?;
+            validate_sprint_patterns(&j.sprint_name_patterns)?;
             anyhow::ensure!(
                 !j.team_field_name.trim().is_empty()
                     && !j.team_field_name.to_lowercase().starts_with("customfield")

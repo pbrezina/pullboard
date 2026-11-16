@@ -86,24 +86,26 @@ pub(super) async fn board(
     j: &mut JiraConfig,
     args: &mut JiraArgs,
 ) -> Result<bool> {
-    let Some(id) = args.board_id else {
+    if args.board_ids.is_empty() {
         return Ok(false);
-    };
+    }
     if verify(p, cancel, j, "Verify --jira-board-id", || async {
-        let board = d.board(j, &id.to_string()).await?;
-        ensure!(
-            board.id == id.to_string(),
-            "board lookup returned a different ID"
-        );
+        for id in &args.board_ids {
+            let board = d.board(j, &id.to_string()).await?;
+            ensure!(
+                board.id == id.to_string(),
+                "board lookup returned a different ID"
+            );
+        }
         Ok(())
     })
     .await?
     .is_some()
     {
-        j.board_id = id;
+        j.board_ids.clone_from(&args.board_ids);
         return Ok(true);
     }
-    args.board_id = None;
+    args.board_ids.clear();
     Ok(false)
 }
 
@@ -226,9 +228,9 @@ pub(super) fn changes(args: &JiraArgs, j: &JiraConfig) -> Vec<String> {
             args.projects.as_ref().map(|v| v.0.join(", ")),
         ),
         (
-            "Board",
-            j.board_id.to_string(),
-            args.board_id.map(|v| v.to_string()),
+            "Boards (My board first)",
+            boards(&j.board_ids),
+            (!args.board_ids.is_empty()).then(|| boards(&args.board_ids)),
         ),
         (
             "Assignee groups",
@@ -242,11 +244,9 @@ pub(super) fn changes(args: &JiraArgs, j: &JiraConfig) -> Vec<String> {
         ),
         ("Team", j.team.clone(), args.team.clone()),
         (
-            "Sprint regex",
-            j.sprint_name_pattern.as_str().to_owned(),
-            args.sprint_name_pattern
-                .as_ref()
-                .map(|v| v.as_str().to_owned()),
+            "Sprint regexes (My pattern first)",
+            patterns(&j.sprint_name_patterns),
+            (!args.sprint_name_patterns.is_empty()).then(|| patterns(&args.sprint_name_patterns)),
         ),
     ] {
         if let Some(after) = after {
@@ -259,10 +259,10 @@ pub(super) fn changes(args: &JiraArgs, j: &JiraConfig) -> Vec<String> {
 pub(super) fn summary(j: &JiraConfig) -> Vec<String> {
     vec![
         format!(
-            "Jira: {} · projects {} (primary first) · board {} · team {}",
+            "Jira: {} · projects {} (primary first) · boards {} (My board first) · team {}",
             j.base_url,
             j.projects.join(", "),
-            j.board_id,
+            boards(&j.board_ids),
             j.team
         ),
         format!(
@@ -271,8 +271,23 @@ pub(super) fn summary(j: &JiraConfig) -> Vec<String> {
             j.team_field_name
         ),
         format!(
-            "Regular expression to identify your sprints: {}",
-            j.sprint_name_pattern.as_str()
+            "Regular expressions to identify your sprints (My pattern first): {}",
+            patterns(&j.sprint_name_patterns)
         ),
     ]
+}
+
+fn boards(ids: &[u64]) -> String {
+    ids.iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn patterns(values: &[SprintPattern]) -> String {
+    values
+        .iter()
+        .map(SprintPattern::as_str)
+        .collect::<Vec<_>>()
+        .join(" | ")
 }

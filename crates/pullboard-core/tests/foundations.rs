@@ -26,10 +26,10 @@ jira:
   email: developer@example.invalid
   token: {keyring: {service: saved-service, account: saved-account}}
   projects: [PRIMARY, SECONDARY]
-  board_id: 42
+  board_ids: [42]
   team: Platform
   team_field_name: AssignedTeam
-  sprint_name_pattern: '(?i)platform'
+  sprint_name_patterns: ['(?i)platform']
   assignee_groups: [engineers, reviewers]
   defaults:
     implementation: {issue_type: Story, assignee: me, workflow: {draft: Coding, ready: null}}
@@ -72,8 +72,7 @@ ai:
             .jira
             .as_ref()
             .unwrap()
-            .sprint_pattern()
-            .is_match("2026-PLATFORM-S1")
+            .allows_sprint("2026-PLATFORM-S1")
     );
     // Absent purpose policies must not serialize as rejected explicit null objects.
     Config::from_yaml(&Config::default().to_yaml().unwrap()).unwrap();
@@ -132,7 +131,7 @@ async fn configuration_reads_are_get_only_scoped_and_header_authenticated() {
         .expect(1)
         .mount(&server)
         .await;
-    let config = Config::from_yaml(&format!("jira: {{base_url: {}/tenant, email: developer, token: {{value: secret}}, projects: [DEV], board_id: 1, team: Platform, sprint_name_pattern: Platform}}", server.uri())).unwrap();
+    let config = Config::from_yaml(&format!("jira: {{base_url: {}/tenant, email: developer, token: {{value: secret}}, projects: [DEV], board_ids: [1], team: Platform, sprint_name_patterns: [Platform]}}", server.uri())).unwrap();
     let http = ReadHttp::jira(config.jira.as_ref().unwrap(), &config.upstream)
         .await
         .unwrap();

@@ -291,7 +291,10 @@ impl Cache {
                 &j.base_url,
                 // Effective policy lives inside the committed complete generation.
                 // New configuration cannot partially replace it before refresh succeeds.
-                format!("targeted-jql-v1:choices-v1:{:?}:{}", j.projects, j.board_id),
+                format!(
+                    "targeted-jql-v1:choices-v1:{:?}:{:?}",
+                    j.projects, j.board_ids
+                ),
             )
         } else {
             let f = self
@@ -626,9 +629,35 @@ fn source(id: &str, name: &str, kind: Kind) -> SourceHealth {
 mod tests {
     use super::*;
     #[tokio::test]
+    async fn board_order_is_scope_but_pattern_policy_changes_wait_for_publication() {
+        let config = Config::from_yaml("jira:\n  base_url: https://jira.example\n  email: human@example.invalid\n  token: {value: synthetic}\n  projects: [DEV]\n  board_ids: [14585, 11235]\n  team: Team\n  sprint_name_patterns: [IDENTITY, CORE]\n").unwrap();
+        let mut cache = Cache::open(Path::new(":memory:"), &config).await.unwrap();
+        let identity = Identity {
+            source_id: "jira".into(),
+            kind: Kind::Jira,
+            account_id: "me".into(),
+            display_name: "Me".into(),
+            username: String::new(),
+            profile_url: None,
+        };
+        let scope = cache.scope(&identity).unwrap();
+        cache
+            .config
+            .jira
+            .as_mut()
+            .unwrap()
+            .sprint_name_patterns
+            .reverse();
+        assert_eq!(scope, cache.scope(&identity).unwrap());
+        cache.config.jira.as_mut().unwrap().board_ids.reverse();
+        assert_ne!(scope, cache.scope(&identity).unwrap());
+        cache.config.jira.as_mut().unwrap().board_ids.push(9);
+        assert_ne!(scope, cache.scope(&identity).unwrap());
+    }
+    #[tokio::test]
     async fn atomic_snapshots_and_retention() {
         let dir = tempfile::tempdir().unwrap();
-        let c=Config{jira:Some(serde_yaml::from_str("base_url: https://jira.example\nemail: me@example.com\ntoken: {value: secret}\nprojects: [DEV]\nboard_id: 12\nteam: Platform\nsprint_name_pattern: literal").unwrap()),..Default::default()};
+        let c=Config{jira:Some(serde_yaml::from_str("base_url: https://jira.example\nemail: me@example.com\ntoken: {value: secret}\nprojects: [DEV]\nboard_ids: [12]\nteam: Platform\nsprint_name_patterns: [literal]").unwrap()),..Default::default()};
         let cache = std::sync::Arc::new(
             Cache::open(&dir.path().join("cache.sqlite"), &c)
                 .await

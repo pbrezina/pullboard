@@ -46,10 +46,10 @@ timestamp with stale health; it cannot undo another source/domain's successful c
 On startup persisted private snapshots, identities and weblinks are quarantined
 until the current credentials' upstream principal is verified. Only an exact scope
 match can restore data: source ID, kind, normalized service URL, real account ID,
-and relevant project/board or forge-filter scope. Changed principal/service or
+and relevant project/ordered-board or forge-filter scope. Changed principal/service or
 incompatible configured scope quarantines old private data in **both card and options
 domains** before later read failures can expose it; derived cross-source links are
-recomputed. Jira group/default policy is instead committed with its complete choice
+recomputed. Jira group/default/pattern policy is instead committed with its complete choice
 generation, never mixed into old pools.
 No token/token fingerprint is an identity key. Failed bootstrap exposes no old
 account data. Identity verification
@@ -74,10 +74,14 @@ paths and repository policy, with no redirects or arbitrary-host reads. See
 [upstream issue URL rules and recovery](upstream-issues.md).
 
 Jira choices are a typed **refresh-time SQLite snapshot**: complete project/type
-metadata/capabilities/team/status choices, all permitted assignees and board sprints,
-plus their effective group/default policy. They publish as one **separate complete
+metadata/capabilities/team/status choices, all permitted assignees and the complete
+active/future sprint union from every configured board, plus effective group/default/pattern
+policy. They publish as one **separate complete
 atomic generation**, independently of cards. Options keep their own committed sprint
-snapshot: validation never mixes in newer board sprints or partially refreshed policy.
+snapshot: inclusion and validation never use live YAML, newer board sprints or partially
+refreshed policy. Creation exposes only names matching any of that generation's regexes;
+display filters and existing assignments retain the full sprint inventory. Failed
+multi-board pagination cannot publish a partial union or mutate a retained generation.
 This cache is not a separate authorization database. Overlapping refreshes coalesce;
 options/drafts/create use a single committed generation and never repeat group/user/
 metadata discovery. Compatible restored choices remain quarantined until current
@@ -90,7 +94,7 @@ complete initial discovery and commit, creation is blocked and options/drafts/cr
 fail explicitly with 503 readiness or 502 discovery/ambiguity errors, not empty success.
 An active refresh leaves previous complete choices ready until replacement. Expected
 assignability is not verification: no optimistic assignments or partial pools appear.
-Group/default-policy changes become effective only on successful options publication,
+Group/default/pattern-policy changes become effective only on successful options publication,
 not by reevaluating new policy against an old pool. Final create validates the latest
 committed generation independent of the editor's last search; no-longer-allowed
 selections are rejected without replay. Jira still enforces current write permissions.

@@ -7,6 +7,7 @@ import {
   attention,
   context,
   person,
+  orderedSprintScenario,
 } from '../testing/fixtures';
 import {
   byTitle,
@@ -171,12 +172,30 @@ describe('Board selection and ordering', () => {
     ).toHaveLength(2);
   });
   it('allows future, no sprint, and all selectors without inventing IDs', () => {
-    const future = { ...sprint, id: 'future', state: 'future' as const };
+    const future = { ...sprint, id: 'future', state: 'future' as const, default_eligible: false };
     expect(matchesSprint(issue({ sprint_ids: ['future'] }), 'active', [future])).toBe(false);
     expect(matchesSprint(issue({ sprint_ids: ['future'] }), 'future', [future])).toBe(true);
     expect(matchesSprint(issue({ sprint_ids: [] }), 'none', [])).toBe(true);
     expect(matchesSprint(issue(), 'none', [])).toBe(false);
     expect(matchesSprint(issue(), 'all', [])).toBe(true);
+  });
+  it('keeps existing assignments and Attention for sprints excluded from creation options', () => {
+    const scenario = orderedSprintScenario();
+    const assigned = issue({ sprint_ids: [scenario.excluded.id] });
+    const snapshot = { ...scenario.board, issues: [assigned] };
+    expect(scenario.options.sprints.some((s) => s.id === scenario.excluded.id)).toBe(false);
+    expect(
+      queues(
+        snapshot,
+        'overview',
+        { ...defaultFilters('overview'), sprint: scenario.excluded.id },
+        scenario.context.jira_projects,
+      ).issues,
+    ).toEqual([assigned]);
+    expect(
+      queues(snapshot, 'attention', defaultFilters('attention'), scenario.context.jira_projects)
+        .issues,
+    ).toEqual([assigned]);
   });
   it('sorts overview titles case-insensitively with stable ID tiebreakers', () => {
     const values = [

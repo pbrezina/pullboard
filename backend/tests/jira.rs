@@ -230,7 +230,7 @@ async fn targeted_searches_keep_distinct_cursors_and_deduplicate_ids_before_hist
 async fn active_future_sprints_paginate_only_configured_board_keep_foreign_origin() {
     let server = MockServer::start().await;
     let mut c = jira(&server.uri());
-    c.sprint_name_pattern = "Identity".parse().unwrap();
+    c.sprint_name_patterns = vec!["Identity".parse().unwrap()];
     for board in [12] {
         for (start, id, state, name) in [
             (0, 101, "active", "2026-CORE-S1"),
@@ -292,7 +292,7 @@ async fn regex_search_changes_only_active_default_eligibility_never_sprint_inven
         ("%YEAR-Identity-S%NUMBER", vec![]),
     ] {
         let mut config = jira(&server.uri());
-        config.sprint_name_pattern = pattern.parse().unwrap();
+        config.sprint_name_patterns = vec![pattern.parse().unwrap()];
         let adapter = Jira::new(&config, &Upstream::default()).await.unwrap();
         let sprints = adapter.sprints().await.unwrap();
         assert_eq!(sprints.len(), 4);

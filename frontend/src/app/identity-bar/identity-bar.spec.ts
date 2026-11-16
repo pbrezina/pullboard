@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { IdentityBar } from './identity-bar';
-import { context, sprint } from '../testing/fixtures';
+import { context, orderedSprintScenario, sprint } from '../testing/fixtures';
 describe('Who am I', () => {
   it('shows distinct identities, current project and linked full sprint names with ambiguity', async () => {
     const f = TestBed.createComponent(IdentityBar);
@@ -10,7 +10,7 @@ describe('Who am I', () => {
         current_sprints: [
           sprint,
           { ...sprint, id: 's2', name: 'Parallel sprint' },
-          { ...sprint, id: 's3', team: 'Web', board_id: 13 },
+          { ...sprint, id: 's3', name: 'Another matching sprint', team: null },
         ],
       }),
     );
@@ -26,6 +26,23 @@ describe('Who am I', () => {
       f.nativeElement.querySelector(`a[href="${sprint.board_url}?selectedSprint=sprint-1"]`),
     ).not.toBeNull();
     expect(f.nativeElement.textContent).toContain('Ends');
+  });
+  it('links the primary-board deduplicated current sprint, never additional-board matches', async () => {
+    const scenario = orderedSprintScenario();
+    const f = TestBed.createComponent(IdentityBar);
+    f.componentRef.setInput('context', scenario.context);
+    await f.whenStable();
+    expect(f.componentInstance.sprints()).toEqual([scenario.primary]);
+    const links = f.nativeElement.querySelectorAll(
+      '.sprint-list a',
+    ) as NodeListOf<HTMLAnchorElement>;
+    expect(links).toHaveLength(1);
+    expect(links[0].href).toBe(
+      'https://jira.example/secure/RapidBoard.jspa?rapidView=12&selectedSprint=sprint-1&view=planning',
+    );
+    expect(f.nativeElement.textContent).not.toContain(scenario.secondaryIdentity.name);
+    expect(f.nativeElement.textContent).not.toContain(scenario.core.name);
+    expect(f.nativeElement.textContent).not.toContain(scenario.excluded.name);
   });
   it('explicitly represents no active sprint and unconfigured accounts', async () => {
     const f = TestBed.createComponent(IdentityBar);

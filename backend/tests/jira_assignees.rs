@@ -81,7 +81,7 @@ async fn absent_and_empty_groups_enumerate_all_users_past_thousand_and_check_eve
         // the pool scan. Old range enumeration is forbidden by the mock helper.
         account_response(&server, "user-0000", json!([])).await;
         let yaml = format!(
-            "base_url: {}\nemail: me@example.invalid\ntoken: {{value: mock}}\nprojects: [DEV]\nboard_id: 12\nteam: Platform\nsprint_name_pattern: literal\n{}",
+            "base_url: {}\nemail: me@example.invalid\ntoken: {{value: mock}}\nprojects: [DEV]\nboard_ids: [12]\nteam: Platform\nsprint_name_patterns: [literal]\n{}",
             server.uri(),
             if explicit_empty {
                 "assignee_groups: []\n"

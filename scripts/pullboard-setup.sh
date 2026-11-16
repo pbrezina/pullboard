@@ -19,7 +19,10 @@ for argument do
     option=${argument%%=*}
     case "$option" in
         --jira-cloud-url|--jira-url|--jira-projects|--jira-board-id|--jira-groups|--jira-team-field|--jira-team|--jira-sprint-name-pattern)
-            case "$seen" in *" $option "*) fail 'Repeated Jira option. Use each Jira option only once.' ;; esac
+            case "$option" in
+                --jira-board-id|--jira-sprint-name-pattern) ;;
+                *) case "$seen" in *" $option "*) fail 'Repeated Jira option. Only board IDs and sprint patterns may repeat.' ;; esac ;;
+            esac
             seen="$seen$option "
             case "$argument" in
                 *=) fail 'A Jira option requires a nonempty value. Use --help.' ;;
@@ -38,11 +41,12 @@ Usage: pullboard-setup.sh [--nightly] [--no-color] [JIRA_OPTIONS]
 Jira options (accept --option=value or --option value):
   --jira-url URL                    HTTPS Jira Cloud tenant root
   --jira-projects KEY1,KEY2          Project keys, primary first (1..100)
-  --jira-board-id ID                Positive numeric board ID
+  --jira-board-id ID                Repeat for ordered board IDs (My board first; 1..100)
   --jira-groups GROUP1,GROUP2        Exact assignee-group names (at least one)
   --jira-team-field NAME            Exact semantic team field name, not an ID
   --jira-team NAME                  Exact team option name
-  --jira-sprint-name-pattern REGEX  Bounded Rust regex (max 4096 UTF-8 bytes)
+  --jira-sprint-name-pattern REGEX  Repeat for ordered regexes (My pattern first; 1..100)
+                                   Each max 4096 UTF-8 bytes; never comma-split
   --jira-cloud-url URL              Legacy editable URL prefill; conflicts with --jira-url
 
 Run the full interactive PullBoard setup wizard on Linux x86-64.
@@ -50,7 +54,8 @@ Stable is the default; --nightly downloads the rolling prerelease and preselects
 the nightly image (editable in the wizard). Supplied Jira settings skip their
 prompts after verification; missing settings and each user's email remain interactive.
 Existing-config updates need confirmation. Changed tenants never authorize sending
-saved tokens without separate consent. Lists are comma-separated; quote spaces/regexes.
+saved tokens without separate consent. Only projects/groups are comma-separated.
+Repeat board/pattern flags in the desired order; values must be unique. Quote regexes.
 Enter credentials in the wizard, never as command-line or environment values.
 Requires a terminal, curl, gzip, sha256sum and standard POSIX utilities.
 Downloads are private, checksum-verified, and removed on exit; nothing is installed

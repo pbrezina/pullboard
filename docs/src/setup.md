@@ -90,10 +90,12 @@ curl --fail --location --proto '=https' --proto-redir '=https' \
     --jira-url=https://example.atlassian.net \
     --jira-projects=DEV,OPS \
     --jira-board-id=42 \
+    --jira-board-id=43 \
     --jira-groups=engineering,reviewers \
     --jira-team-field=AssignedTeam \
     --jira-team='Platform Team' \
-    --jira-sprint-name-pattern='^Platform '
+    --jira-sprint-name-pattern='^Platform ' \
+    --jira-sprint-name-pattern='^Other[0-9]{1,3}$'
 ```
 
 The launcher forwards these arguments unchanged to the setup executable; they are
@@ -105,30 +107,32 @@ and `--flag value` work in the launcher and directly in `pullboard-setup`.
 | --- | --- |
 | `--jira-url URL` | HTTPS Jira Cloud tenant root only; no credentials, port, API/gateway path, query or fragment. Skips the URL prompt. |
 | `--jira-projects KEY1,KEY2` | 1..100 unique project keys, verified individually for the current account. The first key is the primary/header project; input order is preserved. |
-| `--jira-board-id ID` | Positive numeric board ID, verified directly through Jira. |
+| `--jira-board-id ID` | Repeat for 1–100 unique positive board IDs, verified through Jira. Supplied order is preserved; first is **My board**. Do not comma-separate IDs. |
 | `--jira-groups GROUP1,GROUP2` | At least one exact assignee-group name; verify every name and complete membership-read access. Never fall back to all users. |
 | `--jira-team-field NAME` | Exact unique supported semantic team field name, not a raw field ID such as `customfield_123`. Included because the interactive wizard explicitly asks for a field even when only one is available. |
 | `--jira-team NAME` | Exact team option name, verified against selected-project/type create metadata. It need not be observed in active-sprint board issues. |
-| `--jira-sprint-name-pattern REGEX` | Bounded Rust regex search, at most 4096 UTF-8 bytes. Quote regexes to prevent shell expansion; case-sensitive unless inline flags change it. |
+| `--jira-sprint-name-pattern REGEX` | Repeat for 1–100 unique bounded Rust regex searches, at most 4096 UTF-8 bytes each; first is **My sprint pattern**. Never comma-split: commas in quantifiers such as `{1,3}` remain part of one regex. Quote regexes; case-sensitive unless inline flags change it. |
 
 Every flag is optional individually: provided settings bypass their pickers, not
 verification; omitted settings remain interactive with existing values as defaults
 on reruns. Supplying any of these flags enters the Jira section without asking
-whether to enable it. Lists use commas as separators, trim surrounding whitespace,
-reject empty entries and deduplicate in first-occurrence order. Names containing a
-literal comma cannot be represented by these list flags; select those interactively.
-Repeat neither list nor scalar flags; repeated flags and malformed values are
-rejected. Email, token, issue-type policies and per-project workflow overrides have
+whether to enable it. Only `--jira-projects` and `--jira-groups` use commas as separators,
+trim surrounding whitespace, reject empty entries and deduplicate in first-occurrence
+order. Names containing a literal comma cannot be represented by those two flags;
+select them interactively. Only board-ID and sprint-pattern flags are repeatable;
+their values must be unique and remain in supplied order. Repeating other flags or
+supplying malformed values is rejected. Email, token, issue-type policies and per-project workflow overrides have
 no command-line parameters. There are no credential environment inputs.
 
-Explicit projects, board, groups and team do not require recent-item, own-group,
+Explicit projects, boards, groups and team do not require recent-item, own-group,
 board-issue team discovery or broad inventory scans. They still require identity,
 semantic fields, scoped create metadata and active/future sprint verification.
 Failed supplied-setting verification offers **Retry / Correct this setting
 interactively / Cancel setup**; an argument rejected for correction is never
 silently reapplied. Network/metadata failures retain the normal connection recovery
-flow. A regex with zero or multiple active matches still requires explicit
-acknowledgement or correction; it never hides selectable sprints.
+flow. Zero or multiple active matches on My board using My pattern still require
+explicit acknowledgement or correction. All collected sprints remain in board filters;
+creation choices include only names matching any configured pattern.
 
 On an existing configuration, setup displays old → proposed supplied values and
 asks before applying them. Unspecified settings remain unchanged unless edited in
@@ -180,7 +184,7 @@ Scoped-token gateway routing (`api.atlassian.com/ex/jira/…`) is not supported 
 tenant-root setup flow; do not paste a scoped gateway token and assume it will work.
 
 The account needs access to configured projects/issues and comments/history; the
-chosen Agile board, board configuration and active/future sprints; visible fields,
+chosen Agile boards and active/future sprints, primary-board configuration; visible fields,
 create metadata and per-project/type statuses. Group discovery must expose the
 selected groups and **their complete memberships** (tenant permissions often require
 Browse users and groups or administrator assistance). Runtime also verifies each
@@ -194,10 +198,12 @@ transition. Sprint updates require applicable Scrum/Sprint support plus Edit Iss
 and Schedule Issues. Read verification and simulated success do not prove write
 permissions. See [provider requirements](providers.md#jira) and [Jira choices](jira.md).
 
-Project and board selection opens the **recent-item picker immediately**, not a
-selection-method menu or the tenant's entire inventory. Accepting a selection
-advances directly (with a primary-project question when needed). Press **Ctrl-O More
-options** in a project, board or group picker to open its discovery-method menu. Recent lists
+Project and board selection opens the **recent-item picker immediately** when choices
+are available, not a selection-method menu or the tenant's entire inventory. Board
+selection supports multiple choices. Accepting it verifies every selected board and
+asks **My board:**, then saves that board first. Project selection similarly asks for
+a primary project when needed. Press **Ctrl-O More options** in a project, board or
+group picker to open its actions menu. Recent lists
 are shortcuts, not complete lists of what you can access. When editing, saved
 selections absent from those lists are verified directly and remain available;
 they are not silently removed.
@@ -208,6 +214,10 @@ they are not silently removed.
 - Add a board using its numeric ID or full board URL. Setup verifies that board
   directly. Project and board URLs must belong to the configured Jira tenant;
   entering a URL never redirects your credentials to another service.
+- **Board actions** lets you add/remove selections from the recent/verified list,
+  add a manual board, retry saved-board verification, or continue and choose **My board**.
+  Keep 1–100 unique boards. Saved selections retain their order and remain selected
+  even when absent from recents; an unverified board must be retried or explicitly removed.
 - Explicit full-lookup actions can load **all projects**, or **all boards relevant
   to the selected projects**. Each requires confirmation after a warning about long
   waits and API limits. Setup never scans every board in the tenant automatically.
@@ -236,14 +246,16 @@ the configured pagination bounds; partial results are not presented as complete.
 The default limits remain 30 seconds per request, 10 seconds to connect, 100 pages
 and up to 100 requested rows per page; a multi-page lookup can take longer overall.
 
-Choose the intended primary project; it is saved **first** and controls the header.
-A board remains required for the complete active/future sprint inventory and board
-estimation configuration; a sprint-name pattern does not replace board selection.
+Choose the intended primary project, **My board** and **My sprint pattern**; each is
+saved **first** in its respective ordered list. All selected boards supply a complete
+active/future sprint inventory, deduplicated by sprint ID with first-configured-board
+provenance, never by following `originBoardId`. My board alone supplies header links
+and estimation configuration. Boards and patterns are independent, not paired.
 
 Without a supplied verified `--jira-team-field`, setup explicitly asks
 **Team field (semantic name):** even when only one field is
 available. The **Team** picker initially offers verified option values observed on
-the selected board's issues across **all returned active sprints**. It does not
+**My board's** issues across **all returned active sprints**. It does not
 scan future sprints or history, or filter this discovery by the sprint-name regex.
 Observed option IDs and values must match selected-project/type create metadata;
 an observed team is **not proof that you personally belong to it**.
@@ -258,15 +270,27 @@ create-metadata teams** without another scan, or retry board issue discovery.
 A saved team remains available if still verified by that metadata, even when not
 observed in current active-sprint issues; setup labels that distinction.
 
-**Regular expression to identify your sprints:** accepts a bounded **Rust regex
-search**, case-sensitive unless inline flags change it; anchors are optional. For
-example, `TEAM` searches anywhere, `^TEAM` matches a prefix, and `(?i)team` ignores
-case. There are no percent-token substitutions. The regex only matches discovered
-sprint names to determine defaults; it does not discover sprints or restrict their
-availability. Preview active/future sprints and explicitly acknowledge zero/multiple
-matching active sprints. All returned active/future sprints remain selectable. No
-assignee/sprint/status is automatically selected for a new ticket; workflow mappings
-are suggestions only.
+**Regular expression to identify your sprints:** edits the first/saved pattern and
+accepts a bounded **Rust regex search**, case-sensitive unless inline flags change
+it; anchors are optional. For example, `TEAM` searches anywhere, `^TEAM` matches a
+prefix, and `(?i)team` ignores case. Each expression is at most 4096 UTF-8 bytes,
+with bounded compiled size and no percent-token substitutions.
+
+**Sprint pattern actions** offers **Add sprint pattern**, **Edit sprint pattern**,
+**Remove sprint pattern**, **Choose My sprint pattern**, and **Continue with these
+patterns**. Keep 1–100 unique patterns; choosing My pattern moves it first. Saved
+additional patterns survive edits. The preview labels each active/future sprint
+**Included creation** or **Excluded creation**, shows its queried board, and marks
+**My current sprint match** only for active first-board/first-pattern matches.
+Zero/multiple current matches require **Continue with no unique current-sprint
+default?** acknowledgement or correction. There is no additional-board/pattern fallback.
+
+Any pattern permits a creation choice across all selected boards, independently of
+ticket team and purpose. Nonmatches still appear in board filters and existing
+assignments; patterns never restrict ticket discovery or Attention. New tickets
+start No sprint, Unassigned and no transition; workflow mappings are suggestions only.
+Setup writes `board_ids` and `sprint_name_patterns`; old singular YAML keys are
+[rejected rather than migrated automatically](configuration.md#migrate-singular-sprint-settings).
 
 ### Forges
 

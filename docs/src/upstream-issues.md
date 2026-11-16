@@ -91,8 +91,10 @@ transfer, use its new canonical URL on a configured, permitted instance.
   clone starts **Unassigned**, **No sprint** and **Jira default — no transition**;
   story points start empty too. Legacy `assignee: me` and workflow suggestions do
   not preselect those values. Optional blanks are normal; required inputs need
-  explicit selection. All board active/future sprints remain available independently
-  of team, and status choices belong to the selected project/type.
+  explicit selection. Active/future creation sprint choices match **any** committed
+  pattern across all configured boards, independently of ticket team, just as for PRs.
+  Nonmatches remain in board filters and existing assignments. Status choices belong
+  to the selected project/type.
 - Review and edit all fields before submission. Oversized text is not silently
   truncated: edit titles over 255 characters or descriptions over 100,000 characters.
 
@@ -112,7 +114,8 @@ it makes no request per keystroke. Options/draft/create do not rediscover metada
 or group membership. Retained complete stale choices remain usable and are labeled
 through independent `jira_options.health` and `jira_options.ready`, not Jira ticket health; first-run
 creation waits for a verified complete generation. Policy changes apply at the next
-successful atomic options publication, never to an old pool or newer board sprints.
+successful atomic options publication. Sprint inclusion/validation use that generation's
+own complete multi-board snapshot and pattern policy, never live YAML or newer board sprints.
 An explicit status requests at
 most one direct post-create transition, with no-op at the target and success plus
 warning if unavailable/rejected. Dismissible persistent notices keep the real issue

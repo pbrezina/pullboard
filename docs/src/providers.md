@@ -146,7 +146,7 @@ authenticate tenant-root requests; authenticated `/rest/api/3/myself` discovers
 identity for mentions/assignment. The [setup wizard](setup.md#jira-cloud) links token
 creation/help and requires explicit assignee groups rather than silently selecting all users.
 Use credentials allowed to browse configured projects, issues, comments, changelog,
-the configured board, its configuration/sprints, visible fields, create metadata,
+all configured boards' active/future sprints, primary-board configuration, visible fields, create metadata,
 per-type project statuses (`/rest/api/3/project/{key}/statuses`, Browse Projects) and
 user/group discovery. Configured groups need complete group lookup/membership access
 plus individual project assignability checks. Absent/empty groups need full paginated
@@ -164,6 +164,10 @@ them. Discovery/eligibility failures fail options closed without failing committ
 Jira tickets; complete same-scope last-good choices stay usable with independent stale
 options health. Without a verified complete initial generation, creation stays blocked.
 Ticket read failures retain only their own scoped last-good cards/sprints; see [Jira setup](jira.md).
+Sprint reads fully paginate every ordered board and deduplicate sprint IDs with
+first-configured-board provenance, never following `originBoardId`. Creation choices
+match any committed pattern; current sprints require active first-board/first-pattern
+matches without fallback. Patterns never narrow ticket discovery or Attention.
 For explicit non-simulated actions, Jira permissions must additionally allow issue
 creation, assignment, remote links and the selected transition; sprint follow-up
 requires discovered scrum/Sprint support and EDIT_ISSUES + SCHEDULE_ISSUES. These reads

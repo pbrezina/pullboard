@@ -339,7 +339,7 @@ async fn manual_groups_fail_closed_for_wrong_names_and_incomplete_members() {
 }
 #[tokio::test]
 async fn metadata_verifies_groups_and_keeps_active_future_and_only_unique_status_names() {
-    let config = Config::from_yaml("jira:\n  base_url: https://example.atlassian.net\n  email: fake@example.invalid\n  token: {value: fake}\n  projects: [ONE]\n  board_id: 7\n  team: Actual team\n  sprint_name_pattern: Team\n  assignee_groups: [developers]\n").unwrap();
+    let config = Config::from_yaml("jira:\n  base_url: https://example.atlassian.net\n  email: fake@example.invalid\n  token: {value: fake}\n  projects: [ONE]\n  board_ids: [7]\n  team: Actual team\n  sprint_name_patterns: [Team]\n  assignee_groups: [developers]\n").unwrap();
     let fake = Fake::new(vec![
         (
             "rest/api/3/group/member",
@@ -377,6 +377,103 @@ async fn metadata_verifies_groups_and_keeps_active_future_and_only_unique_status
     assert_eq!(m.types[0].teams, ["Actual team"]);
     assert_eq!(m.types[0].statuses, ["Open"]);
     assert!(fake.responses.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn multi_board_metadata_paginates_union_and_prefers_first_configured_provenance() {
+    let mut jira = jira("https://example.atlassian.net");
+    jira.board_ids = vec![12, 7];
+    let fake = Fake::new(vec![
+        (
+            "rest/api/3/group/member",
+            json!({"startAt":0,"total":0,"values":[]}),
+        ),
+        ("rest/api/3/field", json!([])),
+        ("rest/agile/1.0/board/12", json!({"id":12})),
+        (
+            "rest/agile/1.0/board/12/sprint",
+            json!({"startAt":0,"isLast":false,"values":[{"id":1,"name":"Team primary","state":"active","originBoardId":999}]}),
+        ),
+        (
+            "rest/agile/1.0/board/12/sprint",
+            json!({"startAt":1,"isLast":true,"values":[{"id":2,"name":"UAH","state":"future"}]}),
+        ),
+        ("rest/agile/1.0/board/7", json!({"id":7})),
+        (
+            "rest/agile/1.0/board/7/sprint",
+            json!({"startAt":0,"isLast":true,"values":[{"id":1,"name":"Other copy","state":"future"},{"id":3,"name":"CORE","state":"active"}]}),
+        ),
+        (
+            "rest/api/3/issue/createmeta/ONE/issuetypes",
+            json!({"startAt":0,"total":0,"issueTypes":[]}),
+        ),
+        ("rest/api/3/project/ONE/statuses", json!([])),
+    ]);
+    let m = discovery::metadata_from(&fake, &jira).await.unwrap();
+    assert_eq!(m.board_ids, [12, 7]);
+    assert_eq!(m.sprints.len(), 3);
+    assert_eq!(m.sprints[0].board_id, 12);
+    assert_eq!(m.sprints[0].name, "Team primary");
+    assert_eq!(m.sprints[1].name, "UAH");
+    assert_eq!(m.sprints[2].board_id, 7);
+    assert!(fake.responses.lock().unwrap().is_empty());
+    assert!(
+        fake.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(path, _)| !path.contains("999"))
+    );
+}
+
+#[tokio::test]
+async fn required_secondary_board_verification_or_page_failure_discards_partial_metadata() {
+    for bad_board in [true, false] {
+        let mut jira = jira("https://example.atlassian.net");
+        jira.board_ids = vec![12, 7];
+        let mut rows = vec![
+            (
+                "rest/api/3/group/member",
+                json!({"startAt":0,"total":0,"values":[]}),
+            ),
+            ("rest/api/3/field", json!([])),
+            ("rest/agile/1.0/board/12", json!({"id":12})),
+            (
+                "rest/agile/1.0/board/12/sprint",
+                json!({"startAt":0,"isLast":true,"values":[{"id":1,"name":"Team primary","state":"active"}]}),
+            ),
+            (
+                "rest/agile/1.0/board/7",
+                json!({"id":if bad_board { 8 } else { 7 }}),
+            ),
+        ];
+        if !bad_board {
+            rows.push((
+                "rest/agile/1.0/board/7/sprint",
+                json!({"startAt":9,"isLast":true,"values":[]}),
+            ));
+        }
+        let fake = Fake::new(rows);
+        assert!(discovery::metadata_from(&fake, &jira).await.is_err());
+        assert!(fake.responses.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn changing_board_list_membership_or_primary_invalidates_cached_team_metadata_before_reads() {
+    let mut jira = jira("https://example.atlassian.net");
+    let mut metadata = team_metadata();
+    metadata.board_ids = vec![7, 12];
+    for boards in [vec![7], vec![12, 7], vec![7, 12, 8]] {
+        jira.board_ids = boards;
+        let fake = Fake::new(vec![]);
+        assert!(
+            discovery::board_teams_from(&fake, &jira, &metadata)
+                .await
+                .is_err()
+        );
+        assert!(fake.requests.lock().unwrap().is_empty());
+    }
 }
 #[tokio::test]
 async fn forge_identity_uses_shared_read_only_adapter_auth_and_versioned_base() {
@@ -428,7 +525,7 @@ async fn synthetic_inference_uses_exact_model_and_only_fixed_synthetic_content()
 }
 
 fn jira(base: &str) -> JiraConfig {
-    let mut jira = Config::from_yaml("jira:\n  base_url: https://example.atlassian.net\n  email: fake@example.invalid\n  token: {value: synthetic-test-token}\n  projects: [ONE]\n  board_id: 7\n  team: Actual team\n  sprint_name_pattern: Team\n  assignee_groups: [developers]\n").unwrap().jira.unwrap();
+    let mut jira = Config::from_yaml("jira:\n  base_url: https://example.atlassian.net\n  email: fake@example.invalid\n  token: {value: synthetic-test-token}\n  projects: [ONE]\n  board_ids: [7]\n  team: Actual team\n  sprint_name_patterns: [Team]\n  assignee_groups: [developers]\n").unwrap().jira.unwrap();
     jira.base_url = base.into();
     jira
 }
@@ -1378,7 +1475,7 @@ async fn pagination_diagnostics_identify_read_offset_and_configured_incomplete_b
 
 fn team_metadata() -> discovery::Metadata {
     discovery::Metadata {
-        board_id: 7,
+        board_ids: vec![7],
         team_field_name: "AssignedTeam".into(),
         team_field_id: Some("customfield_42".into()),
         types: vec![discovery::TypeMetadata {
@@ -1401,16 +1498,19 @@ fn team_metadata() -> discovery::Metadata {
         sprints: vec![
             discovery::Sprint {
                 id: "11".into(),
+                board_id: 7,
                 name: "Does not match the configured regex".into(),
                 state: "active".into(),
             },
             discovery::Sprint {
                 id: "12".into(),
+                board_id: 7,
                 name: "Another foreign active sprint".into(),
                 state: "active".into(),
             },
             discovery::Sprint {
                 id: "13".into(),
+                board_id: 7,
                 name: "Team future".into(),
                 state: "future".into(),
             },
@@ -1760,7 +1860,7 @@ async fn board_team_scope_and_unsafe_field_or_sprint_ids_cannot_trigger_untruste
     for change in 0..6 {
         let mut metadata = team_metadata();
         match change {
-            0 => metadata.board_id = 8,
+            0 => metadata.board_ids = vec![8],
             1 => metadata.team_field_name = "Other field".into(),
             2 => metadata.team_field_id = Some("customfield_42&fields=secret".into()),
             3 => metadata.team_field_id = None,

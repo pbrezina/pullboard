@@ -897,7 +897,7 @@ async fn context_uses_yaml_project_order_and_only_sorted_matching_active_sprints
             .options(key, Purpose::Implementation, None, "")
             .await
             .unwrap();
-        assert_eq!(options.sprints.len(), 5);
+        assert_eq!(options.sprints.len(), 4);
         assert!(options.defaults.sprint_id.is_none());
     }
     assert_eq!(app.cache.read().await.unwrap().board.sprints.len(), 5);

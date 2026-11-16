@@ -338,6 +338,53 @@ export function options(purpose: JiraOptions['purpose'] = 'review'): JiraOptions
     },
   };
 }
+/** Mock policy: board_ids [12, 13], patterns ['SSSD-IDENTITY', 'SSSD-CORE']. */
+export function orderedSprintScenario(purpose: JiraOptions['purpose'] = 'review') {
+  // Returned by both boards upstream; the backend keeps the first board's provenance.
+  const primary: Sprint = {
+    ...sprint,
+    name: '2026-SSSD-IDENTITY-S42',
+    team: null,
+    board_url:
+      'https://jira.example/secure/RapidBoard.jspa?rapidView=12&selectedSprint=old&view=planning',
+  };
+  const secondaryIdentity: Sprint = {
+    ...primary,
+    id: 'secondary-identity',
+    name: '2026-SSSD-IDENTITY-S43',
+    board_id: 13,
+    board_url: 'https://jira.example/secure/RapidBoard.jspa?rapidView=13',
+    default_eligible: false,
+  };
+  const core: Sprint = {
+    ...secondaryIdentity,
+    id: 'core-1',
+    name: '2026-SSSD-CORE-S42',
+  };
+  const future: Sprint = {
+    ...primary,
+    id: 'identity-future',
+    name: '2026-SSSD-IDENTITY-S44',
+    state: 'future',
+    default_eligible: false,
+  };
+  const excluded: Sprint = {
+    ...primary,
+    id: 'uah-1',
+    name: '2026-UAH-S42',
+    default_eligible: false,
+  };
+  return {
+    primary,
+    secondaryIdentity,
+    core,
+    future,
+    excluded,
+    board: board({ sprints: [primary, secondaryIdentity, core, future, excluded] }),
+    context: context({ current_sprints: [primary] }),
+    options: { ...options(purpose), sprints: [primary, secondaryIdentity, core, future] },
+  };
+}
 export function draft(purpose: TicketDraft['purpose'] = 'review'): TicketDraft {
   return {
     pull_request_id: pr().id,

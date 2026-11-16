@@ -172,6 +172,8 @@ struct MockDiscovery {
     ai_calls: Cell<usize>,
     ai_fails: bool,
     ambiguous_sprints: bool,
+    additional_sprints: Vec<Sprint>,
+    metadata_boards: RefCell<Vec<Vec<u64>>>,
     metadata_teams: Option<Vec<String>>,
     field_inventories: RefCell<VecDeque<Vec<Choice>>>,
     team_inventories: RefCell<VecDeque<Vec<String>>>,
@@ -253,12 +255,20 @@ impl Discovery for MockDiscovery {
         {
             bail!("board lookup returned HTTP 503");
         }
-        if let Some(message) = self.manual_error {
+        if let Some(message) = self.manual_error.filter(|_| input != "7") {
             bail!("{message}");
         }
         self.manual_boards
             .get(input)
             .cloned()
+            .or_else(|| {
+                self.manual_boards
+                    .values()
+                    .chain(&self.project_boards)
+                    .find(|item| item.id == input)
+                    .cloned()
+            })
+            .or_else(|| (input == "7").then(|| Choice::new("7", "7 Mock board")))
             .ok_or_else(|| anyhow::anyhow!("board not found or not permitted (HTTP 404)"))
     }
     async fn project_boards(&self, j: &JiraConfig) -> Result<Vec<Choice>> {
@@ -272,7 +282,7 @@ impl Discovery for MockDiscovery {
     }
     async fn settings(&self, j: &JiraConfig) -> Result<Catalog> {
         assert!(!j.projects.is_empty());
-        assert!(j.board_id > 0);
+        assert!(!j.board_ids.is_empty());
         self.calls.borrow_mut().push("settings".into());
         Ok(Catalog {
             groups: vec![Choice::new("developers", "developers")],
@@ -310,6 +320,7 @@ impl Discovery for MockDiscovery {
     }
     async fn metadata(&self, j: &JiraConfig) -> Result<Metadata> {
         self.calls.borrow_mut().push("metadata".into());
+        self.metadata_boards.borrow_mut().push(j.board_ids.clone());
         let teams = self
             .team_inventories
             .borrow_mut()
@@ -319,11 +330,13 @@ impl Discovery for MockDiscovery {
         let mut sprints = vec![
             Sprint {
                 id: "1".into(),
+                board_id: j.board_ids[0],
                 name: "Team A current".into(),
                 state: "active".into(),
             },
             Sprint {
                 id: "2".into(),
+                board_id: j.board_ids[0],
                 name: "Team A future".into(),
                 state: "future".into(),
             },
@@ -331,12 +344,14 @@ impl Discovery for MockDiscovery {
         if self.ambiguous_sprints {
             sprints.push(Sprint {
                 id: "3".into(),
+                board_id: j.board_ids[0],
                 name: "Team A second".into(),
                 state: "active".into(),
             });
         }
+        sprints.extend(self.additional_sprints.clone());
         Ok(Metadata {
-            board_id: j.board_id,
+            board_ids: j.board_ids.clone(),
             team_field_name: j.team_field_name.clone(),
             team_field_id: Some("customfield_1".into()),
             types: j
@@ -363,10 +378,10 @@ impl Discovery for MockDiscovery {
         })
     }
     async fn board_teams(&self, j: &JiraConfig, m: &Metadata) -> Result<BoardTeams> {
-        assert_eq!(j.board_id, m.board_id);
+        assert_eq!(j.board_ids, m.board_ids);
         self.calls
             .borrow_mut()
-            .push(format!("board_teams:{}", j.board_id));
+            .push(format!("board_teams:{}", j.board_ids[0]));
         if self.team_failures.borrow_mut().pop_front().unwrap_or(false) {
             bail!("active-sprint issue pagination incomplete (HTTP 403); new-jira-secret");
         }
@@ -403,7 +418,7 @@ fn app() -> Wizard {
     Wizard::new(Cli::try_parse_from(["setup"]).unwrap())
 }
 fn fixture() -> Config {
-    Config::from_yaml("read_only_test_mode: true\nrefresh_interval_seconds: 1234\njira:\n  base_url: https://first.atlassian.net\n  email: human@example.invalid\n  token: {value: jira-sentinel-secret}\n  projects: [ONE, TWO]\n  board_id: 7\n  team: Team A\n  sprint_name_pattern: '^Team A'\n  assignee_groups: [developers]\nforges:\n  - id: stable-one\n    name: Personal\n    kind: github\n    base_url: https://api.github.com\n    token: {value: forge-sentinel-secret}\n    include_repositories: ['org/*']\n    default_project: TWO\nai:\n  token: {value: ai-sentinel-secret}\n").unwrap()
+    Config::from_yaml("read_only_test_mode: true\nrefresh_interval_seconds: 1234\njira:\n  base_url: https://first.atlassian.net\n  email: human@example.invalid\n  token: {value: jira-sentinel-secret}\n  projects: [ONE, TWO]\n  board_ids: [7]\n  team: Team A\n  sprint_name_patterns: ['^Team A']\n  assignee_groups: [developers]\nforges:\n  - id: stable-one\n    name: Personal\n    kind: github\n    base_url: https://api.github.com\n    token: {value: forge-sentinel-secret}\n    include_repositories: ['org/*']\n    default_project: TWO\nai:\n  token: {value: ai-sentinel-secret}\n").unwrap()
 }
 fn runtime() -> Vec<Step> {
     vec![
@@ -430,6 +445,7 @@ fn jira_new() -> Vec<Step> {
     steps.extend(jira_selections());
     steps.extend([
         Text("Regular expression to identify your sprints", "<default>"),
+        Enter("Sprint pattern actions"),
         Confirm("Configure advanced issue", false),
     ]);
     steps
@@ -483,14 +499,18 @@ async fn new_linear_flow_opens_singleton_pickers_directly_and_has_live_ai_disabl
     assert!(p.transcript.iter().all(|s| !s.contains("new-jira-secret")));
     for question in [
         "Jira projects:",
-        "Jira board:",
+        "Jira boards:",
         "Assignee groups (at least one):",
         "Team field (semantic name):",
         "Team:",
     ] {
         assert!(p.options.iter().any(|(q, _)| q == question));
     }
-    assert!(!p.options.iter().any(|(q, _)| q.ends_with(" actions:")));
+    assert!(
+        !p.options
+            .iter()
+            .any(|(q, _)| q.ends_with(" actions:") && q != "Sprint pattern actions:")
+    );
     assert_eq!(
         p.options
             .iter()
@@ -521,7 +541,7 @@ async fn team_default_picker_contains_only_observed_verified_active_board_choice
         ["Team B"]
     );
     assert_eq!(a.config.jira.as_ref().unwrap().team, "Team B");
-    assert_eq!(a.config.jira.as_ref().unwrap().board_id, 7);
+    assert_eq!(a.config.jira.as_ref().unwrap().board_ids, [7]);
     assert!(
         !d.calls
             .borrow()
@@ -583,13 +603,14 @@ async fn team_ctrl_o_offers_all_verified_metadata_choices_without_a_new_scan_or_
         Select("Team actions", 1),
         Select("Team:", 1),
         Enter("Regular expression to identify your sprints"),
+        Enter("Sprint pattern actions"),
         Enter("Configure advanced issue"),
     ]);
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);
     configured(&mut a, &mut p, &d).await;
     assert_eq!(a.config.jira.as_ref().unwrap().team, "Team B");
-    assert_eq!(a.config.jira.as_ref().unwrap().board_id, 7);
+    assert_eq!(a.config.jira.as_ref().unwrap().board_ids, [7]);
     assert_eq!(
         d.calls
             .borrow()
@@ -651,6 +672,7 @@ async fn failed_or_empty_board_teams_open_explicit_fallback_and_retry_without_pa
             steps.extend([
                 Enter("Team:"),
                 Enter("Regular expression to identify your sprints"),
+                Enter("Sprint pattern actions"),
                 Enter("Configure advanced issue"),
             ]);
             steps.extend(disabled_tail());
@@ -739,6 +761,7 @@ async fn failed_jira_only_retries_changes_or_removes_never_saves_unverified() {
             steps.extend(jira_selections());
             steps.extend([
                 Text("Regular expression to identify your sprints", "<default>"),
+                Enter("Sprint pattern actions"),
                 Confirm("Configure advanced issue", false),
             ]);
         }
@@ -775,6 +798,7 @@ async fn edited_project_removal_is_deliberate_and_preserves_nonorphaned_advanced
         Enter("Team field (semantic name):"),
         Enter("Team:"),
         Text("Regular expression to identify your sprints", "<default>"),
+        Enter("Sprint pattern actions"),
         Confirm("Configure advanced issue", false),
         Confirm("Configure existing forge", true),
         Select("Forge provider", 0),
@@ -930,8 +954,8 @@ async fn complete_team_command_skips_supplied_prompts_and_uses_only_targeted_ver
     assert_eq!(j.assignee_groups, ["developers"]);
     assert_eq!(j.team, "Team A");
     assert_eq!(j.team_field_name, "AssignedTeam");
-    assert_eq!(j.board_id, 7);
-    assert_eq!(j.sprint_name_pattern.as_str(), "^Team A");
+    assert_eq!(j.board_ids, [7]);
+    assert_eq!(j.sprint_name_patterns[0].as_str(), "^Team A");
     assert_eq!(
         *d.calls.borrow(),
         [
@@ -950,6 +974,276 @@ async fn complete_team_command_skips_supplied_prompts_and_uses_only_targeted_ver
             .join("\n")
             .contains("projects TWO, ONE (primary first)")
     );
+}
+
+#[tokio::test]
+async fn repeatable_cli_lists_skip_pickers_but_verify_every_board_and_keep_order() {
+    let mut argv = team_cli();
+    argv.extend([
+        "--jira-board-id=99".into(),
+        "--jira-sprint-name-pattern=CORE[0-9]{1,3}".into(),
+    ]);
+    let mut a = Wizard::new(Cli::try_parse_from(argv).unwrap());
+    let mut d = team_discovery();
+    d.manual_boards
+        .insert("99".into(), Choice::new("99", "Secondary board"));
+    let mut steps = team_credentials();
+    steps.push(Confirm("Edit Jira settings", false));
+    steps.extend(disabled_tail());
+    let mut p = Script::new(steps);
+    configured(&mut a, &mut p, &d).await;
+    let j = a.config.jira.as_ref().unwrap();
+    assert_eq!(j.board_ids, [7, 99]);
+    assert_eq!(
+        j.sprint_name_patterns
+            .iter()
+            .map(|p| p.as_str())
+            .collect::<Vec<_>>(),
+        ["^Team A", "CORE[0-9]{1,3}"]
+    );
+    assert!(d.calls.borrow().contains(&"board:7".into()));
+    assert!(d.calls.borrow().contains(&"board:99".into()));
+    assert!(
+        !p.options
+            .iter()
+            .any(|(q, _)| q.starts_with("Jira board") || q.starts_with("Sprint pattern"))
+    );
+}
+
+#[tokio::test]
+async fn secondary_supplied_board_failure_cannot_save_a_partially_verified_list() {
+    let mut argv = team_cli();
+    argv.push("--jira-board-id=999".into());
+    let mut a = Wizard::new(Cli::try_parse_from(argv).unwrap());
+    let d = team_discovery();
+    let mut steps = team_credentials();
+    steps.push(Cancel("Supplied Jira setting failed"));
+    let mut p = Script::new(steps);
+    assert!(
+        a.configure(&mut p, &d, &CancellationToken::new())
+            .await
+            .unwrap_err()
+            .is::<Cancelled>()
+    );
+    p.done();
+    assert!(a.config.jira.is_none());
+    assert!(d.calls.borrow().contains(&"board:999".into()));
+    assert!(!d.calls.borrow().contains(&"metadata".into()));
+}
+
+#[tokio::test]
+async fn changing_my_board_on_supplied_review_rebuilds_metadata_in_the_new_order() {
+    let mut argv = team_cli();
+    argv.push("--jira-board-id=99".into());
+    let mut a = Wizard::new(Cli::try_parse_from(argv).unwrap());
+    let mut d = team_discovery();
+    d.manual_boards
+        .insert("99".into(), Choice::new("99", "Second board"));
+    let mut steps = team_credentials();
+    steps.extend([
+        Confirm("Edit Jira settings", true),
+        Enter("Jira Cloud tenant URL"),
+        Enter("Atlassian account email"),
+        Password(true, ""),
+        Enter("Jira projects"),
+        Enter("Primary Jira project"),
+        Enter("Jira boards"),
+        Select("My board", 1),
+        Enter("Assignee groups"),
+        Enter("Team field"),
+        Enter("Team:"),
+        Enter("Regular expression"),
+        Enter("Sprint pattern actions"),
+        Confirm("Configure advanced issue", false),
+        Confirm("Edit Jira settings", false),
+    ]);
+    steps.extend(disabled_tail());
+    let mut p = Script::new(steps);
+    configured(&mut a, &mut p, &d).await;
+    assert_eq!(*d.metadata_boards.borrow(), [vec![7, 99], vec![99, 7]]);
+    assert_eq!(a.config.jira.unwrap().board_ids, [99, 7]);
+}
+
+#[tokio::test]
+async fn unverified_saved_secondary_board_requires_explicit_removal_or_blocks_continuation() {
+    for remove in [true, false] {
+        let mut a = app();
+        a.config = fixture();
+        a.config.forges.clear();
+        let j = a.config.jira.as_mut().unwrap();
+        j.projects = vec!["ONE".into()];
+        j.board_ids = vec![7, 999];
+        let before = a.config.to_yaml().unwrap();
+        let d = MockDiscovery::default();
+        let mut steps = vec![
+            Enter("Configure Jira"),
+            Enter("Jira Cloud tenant URL"),
+            Enter("Atlassian account email"),
+            Password(true, ""),
+            Enter("Jira projects"),
+        ];
+        if remove {
+            steps.extend([
+                Multi("Jira boards", vec![0]),
+                Enter("Assignee groups"),
+                Enter("Team field"),
+                Enter("Team:"),
+                Enter("Regular expression"),
+                Enter("Sprint pattern actions"),
+                Confirm("Configure advanced issue", false),
+            ]);
+            steps.extend(disabled_tail());
+            let mut p = Script::new(steps);
+            configured(&mut a, &mut p, &d).await;
+            assert_eq!(a.config.jira.unwrap().board_ids, [7]);
+        } else {
+            steps.extend([Enter("Jira boards"), Cancel("Board actions")]);
+            let mut p = Script::new(steps);
+            assert!(
+                a.configure(&mut p, &d, &CancellationToken::new())
+                    .await
+                    .unwrap_err()
+                    .is::<Cancelled>()
+            );
+            p.done();
+            assert_eq!(a.config.to_yaml().unwrap().as_str(), before.as_str());
+            assert!(!d.calls.borrow().contains(&"metadata".into()));
+        }
+    }
+}
+
+#[tokio::test]
+async fn ordered_editors_add_remove_and_reselect_primary_without_losing_saved_patterns() {
+    let mut a = app();
+    a.config = fixture();
+    a.config.forges.clear();
+    let j = a.config.jira.as_mut().unwrap();
+    j.projects = vec!["ONE".into()];
+    j.board_ids = vec![99, 7];
+    j.sprint_name_patterns.push("CORE".parse().unwrap());
+    let d = MockDiscovery {
+        manual_boards: BTreeMap::from([
+            ("99".into(), Choice::new("99", "Saved primary")),
+            ("88".into(), Choice::new("88", "Manual board")),
+        ]),
+        additional_sprints: vec![
+            Sprint {
+                id: "4".into(),
+                board_id: 7,
+                name: "CORE secondary".into(),
+                state: "active".into(),
+            },
+            Sprint {
+                id: "5".into(),
+                board_id: 88,
+                name: "UAH future".into(),
+                state: "future".into(),
+            },
+        ],
+        ..Default::default()
+    };
+    let mut steps = vec![
+        Enter("Configure Jira"),
+        Enter("Jira Cloud tenant URL"),
+        Enter("Atlassian account email"),
+        Password(true, ""),
+        Enter("Jira projects"),
+        Menu("Jira boards"),
+        Select("Board actions", 1),
+        Text("Board ID", "88"),
+        Select("Board actions", 0),
+        Multi("Jira boards", vec![0, 2]), // Remove 99; retain 7, add 88.
+        Select("My board", 1),            // Move 88 first, not numerical order.
+        Enter("Assignee groups"),
+        Enter("Team field"),
+        Enter("Team:"),
+        Enter("Regular expression"),
+        Select("Sprint pattern actions", 0),
+        Text("Additional sprint regex", "UAH"),
+        Select("Sprint pattern actions", 1),
+        Select("Sprint pattern:", 2),
+        Text("Replacement sprint regex", "UAH2"),
+        Select("Sprint pattern actions", 2),
+        Select("Sprint pattern:", 2),
+        Select("Sprint pattern actions", 3),
+        Select("My sprint pattern", 1),
+        Enter("Sprint pattern actions"),
+        Confirm("Continue with no unique", true),
+        Confirm("Configure advanced issue", false),
+    ];
+    steps.extend(disabled_tail());
+    let mut p = Script::new(steps);
+    configured(&mut a, &mut p, &d).await;
+    let j = a.config.jira.as_ref().unwrap();
+    assert_eq!(j.board_ids, [88, 7]);
+    assert_eq!(
+        j.sprint_name_patterns
+            .iter()
+            .map(|p| p.as_str())
+            .collect::<Vec<_>>(),
+        ["CORE", "^Team A"]
+    );
+    assert!(
+        d.calls
+            .borrow()
+            .iter()
+            .position(|c| c == "board:88")
+            .unwrap()
+            < d.calls
+                .borrow()
+                .iter()
+                .position(|c| c == "metadata")
+                .unwrap()
+    );
+    assert!(
+        p.transcript
+            .join("\n")
+            .contains("Included creation sprint: future")
+    );
+    assert!(
+        p.transcript
+            .join("\n")
+            .contains("Excluded creation sprint: future — UAH future")
+    );
+    assert!(
+        p.transcript
+            .join("\n")
+            .contains("0 matching active sprint(s) on My board")
+    );
+    let transcript = p.transcript.join("\n");
+    let active = transcript
+        .find("Included creation sprints — Active:")
+        .unwrap();
+    let future = transcript
+        .find("Included creation sprints — Future:")
+        .unwrap();
+    let excluded = transcript
+        .find("Excluded creation sprints — Active:")
+        .unwrap();
+    assert!(active < future && future < excluded);
+
+    // A subsequent Enter-only edit preserves both ordered lists exactly.
+    let before = a.config.to_yaml().unwrap();
+    let mut steps = vec![
+        Enter("Configure Jira"),
+        Enter("Jira Cloud tenant URL"),
+        Enter("Atlassian account email"),
+        Password(true, ""),
+        Enter("Jira projects"),
+        Enter("Jira boards"),
+        Enter("My board"),
+        Enter("Assignee groups"),
+        Enter("Team field"),
+        Enter("Team:"),
+        Enter("Regular expression"),
+        Enter("Sprint pattern actions"),
+        Confirm("Continue with no unique", true),
+        Confirm("Configure advanced issue", false),
+    ];
+    steps.extend(disabled_tail());
+    let mut p = Script::new(steps);
+    configured(&mut a, &mut p, &d).await;
+    assert_eq!(a.config.to_yaml().unwrap().as_str(), before.as_str());
 }
 
 #[tokio::test]
@@ -1115,7 +1409,7 @@ async fn every_supplied_selector_allows_interactive_correction_without_silent_su
         let mut p = Script::new(steps);
         configured(&mut a, &mut p, &d).await;
         let j = a.config.jira.as_ref().unwrap();
-        assert_eq!(j.board_id, 7);
+        assert_eq!(j.board_ids, [7]);
         assert_eq!(j.team_field_name, "AssignedTeam");
         assert_eq!(j.team, "Team A");
         if flag == "--jira-projects" {
@@ -1177,13 +1471,14 @@ async fn supplied_regex_with_no_unique_active_match_requires_acknowledgement_or_
                 "Regular expression to identify your sprints",
                 "current$",
             ));
+            steps.push(Enter("Sprint pattern actions"));
         }
         steps.push(Confirm("Edit Jira settings", false));
         steps.extend(disabled_tail());
         let mut p = Script::new(steps);
         configured(&mut a, &mut p, &d).await;
         assert_eq!(
-            a.config.jira.as_ref().unwrap().sprint_name_pattern.as_str(),
+            a.config.jira.as_ref().unwrap().sprint_name_patterns[0].as_str(),
             if accept { pattern } else { "current$" }
         );
         assert!(
@@ -1247,6 +1542,7 @@ async fn declining_supplied_existing_update_uses_saved_defaults_instead() {
         Enter("Team field"),
         Enter("Team:"),
         Enter("Regular expression"),
+        Enter("Sprint pattern actions"),
         Confirm("Configure advanced issue", false),
     ];
     steps.extend(disabled_tail());
@@ -1352,6 +1648,7 @@ async fn supplied_review_can_return_to_editable_wizard_without_reapplying_argume
         Enter("Team field"),
         Enter("Team:"),
         Text("Regular expression", "current$"),
+        Enter("Sprint pattern actions"),
         Confirm("Configure advanced issue", false),
         Confirm("Edit Jira settings", false),
     ]);
@@ -1359,7 +1656,7 @@ async fn supplied_review_can_return_to_editable_wizard_without_reapplying_argume
     let mut p = Script::new(steps);
     configured(&mut a, &mut p, &d).await;
     assert_eq!(
-        a.config.jira.as_ref().unwrap().sprint_name_pattern.as_str(),
+        a.config.jira.as_ref().unwrap().sprint_name_patterns[0].as_str(),
         "current$"
     );
     assert!(p.defaults.contains(&(
@@ -1541,11 +1838,13 @@ async fn regex_search_defaults_do_not_filter_inventory_and_ambiguity_requires_ac
     steps.extend([
         Text("Regular expression to identify your sprints", "["),
         Text("Regular expression to identify your sprints", "Team"),
+        Enter("Sprint pattern actions"),
         Confirm("Continue with no unique", false),
         Text(
             "Regular expression to identify your sprints",
             "Team A current",
         ),
+        Enter("Sprint pattern actions"),
         Confirm("Configure advanced issue", false),
     ]);
     steps.extend(disabled_tail());
@@ -1815,6 +2114,7 @@ async fn group_menu_supports_confirmed_full_scan_manual_lookup_retry_and_auto_ad
         Enter("Team field (semantic name):"),
         Enter("Team:"),
         Enter("Regular expression to identify your sprints"),
+        Enter("Sprint pattern actions"),
         Confirm("Configure advanced issue", false),
     ]);
     steps.extend(disabled_tail());
@@ -1884,6 +2184,7 @@ async fn saved_groups_outside_memberships_are_verified_preserved_and_fail_closed
             Enter("Team field (semantic name):"),
             Enter("Team:"),
             Enter("Regular expression to identify your sprints"),
+            Enter("Sprint pattern actions"),
             Enter("Configure advanced issue"),
         ]);
         steps.extend(disabled_tail());
@@ -1930,6 +2231,7 @@ async fn failed_or_empty_own_groups_allow_manual_setup_without_automatic_full_sc
             Enter("Team field (semantic name):"),
             Enter("Team:"),
             Enter("Regular expression to identify your sprints"),
+            Enter("Sprint pattern actions"),
             Enter("Configure advanced issue"),
         ]);
         steps.extend(disabled_tail());
@@ -1967,6 +2269,7 @@ async fn skipping_optional_advanced_preserves_saved_policies_and_filters_exactly
         Enter("Team field (semantic name):"),
         Enter("Team:"),
         Text("Regular expression to identify your sprints", "<default>"),
+        Enter("Sprint pattern actions"),
         Confirm("Configure advanced issue", false),
         Confirm("Configure existing forge", true),
         Select("Forge provider", 0),
@@ -2001,6 +2304,7 @@ async fn rerun_enter_keeps_saved_primary_when_multiselect_returns_inventory_orde
         Enter("Team field (semantic name):"),
         Enter("Team:"),
         Enter("Regular expression to identify your sprints"),
+        Enter("Sprint pattern actions"),
         Enter("Configure advanced issue"),
         Enter("Add a forge account"),
         Enter("AI provider"),
@@ -2076,6 +2380,7 @@ async fn empty_or_failed_recents_allow_manual_disambiguation_and_reuse_verified_
             Enter("Team field (semantic name):"),
             Enter("Team:"),
             Text("Regular expression to identify your sprints", "<default>"),
+            Enter("Sprint pattern actions"),
             Confirm("Configure advanced issue", false),
         ]);
         steps.extend(disabled_tail());
@@ -2083,7 +2388,7 @@ async fn empty_or_failed_recents_allow_manual_disambiguation_and_reuse_verified_
         configured(&mut a, &mut p, &d).await;
         let jira = a.config.jira.unwrap();
         assert_eq!(jira.projects, ["TWO"]);
-        assert_eq!(jira.board_id, 88);
+        assert_eq!(jira.board_ids, [88]);
         let calls = d.calls.borrow();
         assert_eq!(
             calls
@@ -2154,11 +2459,12 @@ async fn broad_lookups_require_separate_warnings_and_explicit_confirmation_and_s
         Select("Board actions", 2),
         Confirm("Load ALL boards for selected projects", true),
         Select("Board actions", 0),
-        Select("Jira board", 1),
+        Multi("Jira board", vec![1]),
         Enter("Assignee groups"),
         Enter("Team field (semantic name):"),
         Enter("Team:"),
         Text("Regular expression to identify your sprints", "<default>"),
+        Enter("Sprint pattern actions"),
         Confirm("Configure advanced issue", false),
     ]);
     steps.extend(disabled_tail());
@@ -2171,6 +2477,7 @@ async fn broad_lookups_require_separate_warnings_and_explicit_confirmation_and_s
             "all_projects",
             "boards",
             "project_boards:ONE,TWO",
+            "board:10",
             "own_groups",
             "settings",
             "metadata",
@@ -2178,7 +2485,7 @@ async fn broad_lookups_require_separate_warnings_and_explicit_confirmation_and_s
         ]
     );
     assert_eq!(a.config.jira.as_ref().unwrap().projects, ["ONE", "TWO"]);
-    assert_eq!(a.config.jira.as_ref().unwrap().board_id, 10);
+    assert_eq!(a.config.jira.as_ref().unwrap().board_ids, [10]);
     let log = p.transcript.join("\n");
     assert!(log.contains("Warning: loading all accessible projects"));
     assert!(log.contains("Warning: loading every board for selected projects [ONE, TWO]"));
@@ -2218,6 +2525,7 @@ async fn failed_broad_and_manual_reads_keep_the_manager_usable_and_explain_the_c
         Enter("Team field (semantic name):"),
         Enter("Team:"),
         Text("Regular expression to identify your sprints", "<default>"),
+        Enter("Sprint pattern actions"),
         Confirm("Configure advanced issue", false),
     ]);
     steps.extend(disabled_tail());
@@ -2239,7 +2547,7 @@ async fn saved_selections_absent_from_recents_are_verified_once_and_preserved_in
     a.config = fixture();
     a.config.forges.clear();
     a.config.jira.as_mut().unwrap().projects = vec!["THREE".into(), "TWO".into(), "ONE".into()];
-    a.config.jira.as_mut().unwrap().board_id = 99;
+    a.config.jira.as_mut().unwrap().board_ids = vec![99];
     let before = serde_json::to_value(&a.config.jira).unwrap();
     let d = MockDiscovery {
         manual_projects: BTreeMap::from([
@@ -2267,6 +2575,7 @@ async fn saved_selections_absent_from_recents_are_verified_once_and_preserved_in
         Enter("Team field (semantic name):"),
         Enter("Team:"),
         Enter("Regular expression to identify your sprints"),
+        Enter("Sprint pattern actions"),
         Enter("Configure advanced issue"),
     ];
     steps.extend(disabled_tail());
@@ -2327,6 +2636,7 @@ async fn unverified_saved_projects_cannot_be_saved_or_silently_removed_and_remov
         Enter("Team field (semantic name):"),
         Enter("Team:"),
         Enter("Regular expression to identify your sprints"),
+        Enter("Sprint pattern actions"),
         Enter("Configure advanced issue"),
         Confirm("Configure existing forge", true),
         Select("Forge provider", 0),
@@ -2387,6 +2697,7 @@ async fn manual_failures_redact_actual_literal_encoded_and_basic_secrets_without
         Enter("Team field (semantic name):"),
         Enter("Team:"),
         Enter("Regular expression to identify your sprints"),
+        Enter("Sprint pattern actions"),
         Enter("Configure advanced issue"),
     ]);
     steps.extend(disabled_tail());

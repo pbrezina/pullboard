@@ -17,6 +17,59 @@
       </div>
     </div>
     <div class="header-actions">
+      <div
+        class="runtime-mode"
+        [class.is-live]="mode.value()?.read_only_test_mode === false"
+        [class.is-unavailable]="!!mode.error()"
+        role="group"
+        aria-label="Runtime Jira action mode"
+      >
+        @if (mode.error(); as error) {
+          <div class="mode-status" role="status">
+            <strong>Mode unavailable</strong>
+            <span class="mode-detail" id="runtime-mode-description"
+              >Jira actions unavailable. {{ error }}</span
+            >
+          </div>
+          <button
+            class="mode-button"
+            aria-describedby="runtime-mode-description"
+            (click)="mode.refresh()"
+          >
+            Check mode
+          </button>
+        } @else if (mode.value(); as current) {
+          <div class="mode-status" role="status">
+            <strong>{{ current.read_only_test_mode ? 'Test mode' : 'Live mode' }}</strong>
+            <span class="mode-detail" id="runtime-mode-description"
+              >{{ current.read_only_test_mode ? 'Jira actions simulated' : 'Jira writes enabled'
+              }}<span class="sr-only"
+                >.
+                {{
+                  current.read_only_test_mode
+                    ? 'No upstream writes.'
+                    : 'Only explicit Jira submissions write upstream.'
+                }}
+                Admitted live actions may finish after switching to Test.</span
+              ></span
+            >
+          </div>
+          <button
+            class="mode-button"
+            aria-describedby="runtime-mode-description"
+            aria-haspopup="dialog"
+            [attr.aria-disabled]="mode.changing()"
+            (click)="changeMode()"
+          >
+            {{ current.read_only_test_mode ? 'Switch to Live' : 'Switch to Test' }}
+          </button>
+        } @else {
+          <div class="mode-status mode-pending" role="status">
+            <strong>Checking mode…</strong>
+            <span class="mode-detail">Jira actions unavailable</span>
+          </div>
+        }
+      </div>
       <div class="sync-indicator" role="status">
         <span
           class="health-dot"
@@ -72,38 +125,6 @@
   @if (store.context(); as context) {
     <app-identity-bar [context]="context" />
   }
-  <aside class="read-only-strip" aria-label="Runtime Jira action mode">
-    @if (mode.value(); as current) {
-      <strong
-        class="chip"
-        role="status"
-        [class.warning]="!current.read_only_test_mode"
-        [class.ready]="current.read_only_test_mode"
-        >{{ current.read_only_test_mode ? 'Test mode' : 'Live mode' }}</strong
-      >
-      <span
-        >{{
-          current.read_only_test_mode
-            ? 'Read-only test mode. Jira actions are simulated. No upstream writes.'
-            : 'Explicit Jira submissions write upstream.'
-        }}
-        Admitted live actions may finish after switching to Test.</span
-      >
-      <button
-        class="small-button"
-        [disabled]="mode.changing() || !!mode.error()"
-        (click)="changeMode()"
-      >
-        {{ current.read_only_test_mode ? 'Switch to Live' : 'Switch to Test' }}
-      </button>
-    } @else {
-      <span>Checking runtime mode… Jira actions are unavailable.</span>
-    }
-    @if (mode.error()) {
-      <span class="error-text" role="status">{{ mode.error() }}</span
-      ><button (click)="mode.refresh()">Check mode</button>
-    }
-  </aside>
   @if (store.error()) {
     <div class="error-banner workspace-error" role="alert">
       <span>{{ store.error() }} Last good data, if available, stays visible.</span

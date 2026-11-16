@@ -37,7 +37,8 @@ export class App {
   }
   changeMode() {
     const mode = this.mode.value();
-    if (!mode) return;
+    // Keep the launcher focusable while a dialog closes, but reject overlapping changes.
+    if (!mode || this.mode.changing() || this.mode.error()) return;
     this.dialog.open(ModeConfirm, {
       data: { mode, target: !mode.read_only_test_mode },
       ariaLabelledBy: 'mode-heading',

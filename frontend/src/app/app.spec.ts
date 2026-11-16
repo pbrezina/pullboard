@@ -25,7 +25,11 @@ describe('PullBoard app', () => {
     expect(text).toContain('Upstream Pull Requests');
     expect(text).toContain('Current active sprints');
     expect(text).toContain('Source health');
-    expect(text).toContain('Read-only test mode');
+    const mode = f.nativeElement.querySelector('.app-header .runtime-mode');
+    expect(mode.textContent).toContain('Test mode');
+    expect(mode.textContent).toContain('Jira actions simulated');
+    expect(mode.querySelector('button').textContent).toContain('Switch to Live');
+    expect(f.nativeElement.querySelector('.workspace-shell .runtime-mode')).toBeNull();
     expect(f.nativeElement.querySelector('input[type="password"]')).toBeNull();
     http.verify();
   });

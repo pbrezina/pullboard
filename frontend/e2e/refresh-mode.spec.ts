@@ -176,6 +176,141 @@ const containedCard = {
   hostOverflowPx: 0,
 };
 
+test('header mode sits before workspace status and only changes after confirmation', async ({
+  context: browser,
+  page,
+}) => {
+  const api = await sharedApi(browser);
+  api.progress(sync());
+  await page.goto('/');
+  const header = page.getByRole('banner');
+  const mode = header.getByRole('group', { name: 'Runtime Jira action mode' });
+  const switchToLive = mode.getByRole('button', { name: 'Switch to Live', exact: true });
+  await expect(mode.getByText('Test mode', { exact: true })).toBeVisible();
+  await expect(mode).toContainText('Jira actions simulated');
+  await expect(page.getByRole('group', { name: 'Runtime Jira action mode' })).toHaveCount(1);
+  const modeBounds = (await mode.boundingBox())!;
+  const workspaceBounds = (await header.locator('.sync-indicator').boundingBox())!;
+  expect(modeBounds.x + modeBounds.width).toBeLessThan(workspaceBounds.x);
+  expect(Math.abs(modeBounds.y - workspaceBounds.y)).toBeLessThan(4);
+  await switchToLive.focus();
+  await page.keyboard.press('Enter');
+  const liveConfirmation = page.getByRole('dialog', { name: 'Enable Live Jira writes?' });
+  await expect(liveConfirmation).toContainText('Admitted live actions may finish');
+  expect(api.counts().toggles).toBe(0);
+  await page.keyboard.press('Escape');
+  await expect(liveConfirmation).toBeHidden();
+  await expect(switchToLive).toBeFocused();
+  expect(api.counts().toggles).toBe(0);
+  await page.keyboard.press('Enter');
+  await liveConfirmation.getByRole('button', { name: 'Enable Live writes', exact: true }).click();
+  await expect(mode.getByText('Live mode', { exact: true })).toBeVisible();
+  await expect(mode).toContainText('Jira writes enabled');
+  const switchToTest = mode.getByRole('button', { name: 'Switch to Test', exact: true });
+  await expect(switchToTest).toBeFocused();
+  expect(api.counts().toggles).toBe(1);
+  await page.keyboard.press('Enter');
+  const testConfirmation = page.getByRole('dialog', { name: 'Switch to Test mode?' });
+  await expect(testConfirmation).toContainText('zero upstream writes');
+  expect(api.counts().toggles).toBe(1);
+  await testConfirmation.getByRole('button', { name: 'Switch to Test', exact: true }).click();
+  await expect(switchToLive).toBeFocused();
+  await expect(mode.getByText('Test mode', { exact: true })).toBeVisible();
+  expect(api.counts()).toMatchObject({ toggles: 2, creates: 0, links: 0 });
+});
+
+for (const readOnly of [true, false]) {
+  test(`header ${readOnly ? 'Test' : 'Live'} mode stays accessible across themes and viewport widths`, async ({
+    context: browser,
+    page,
+  }) => {
+    const api = await sharedApi(browser);
+    api.progress(sync());
+    api.setMode(runtimeMode({ read_only_test_mode: readOnly }));
+    await page.goto('/');
+    const header = page.getByRole('banner');
+    const mode = header.getByRole('group', { name: 'Runtime Jira action mode' });
+    const switchButton = mode.getByRole('button', {
+      name: readOnly ? 'Switch to Live' : 'Switch to Test',
+      exact: true,
+    });
+    for (const theme of ['Light', 'Dark', 'System']) {
+      await header.getByRole('button', { name: `${theme} theme`, exact: true }).click();
+      for (const width of [1440, 1101, 1100, 901, 900, 768, 701, 700, 561, 560, 390, 320]) {
+        await page.setViewportSize({ width, height: 1080 });
+        await expect(switchButton).toBeInViewport();
+        await expect(
+          mode.getByText(readOnly ? 'Test mode' : 'Live mode', { exact: true }),
+        ).toBeInViewport();
+        for (const button of await header.getByRole('button').all()) {
+          await expect(button).toBeInViewport({ ratio: 1 });
+        }
+        expect(await header.evaluate((element) => element.scrollWidth <= innerWidth)).toBe(true);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+          true,
+        );
+        if (width === 1440 || width === 320) {
+          expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+          await header.screenshot({
+            path: test.info().outputPath(`header-${theme.toLowerCase()}-${width}.png`),
+          });
+        }
+      }
+    }
+    expect(api.counts()).toMatchObject({ toggles: 0, creates: 0, links: 0 });
+  });
+}
+
+test('header mode shows checking and failed verification with an accessible retry', async ({
+  context: browser,
+  page,
+}) => {
+  const api = await sharedApi(browser);
+  api.progress(sync());
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => (release = resolve));
+  let unavailable = false;
+  const message = 'Runtime mode could not be verified. Check the local service and retry.';
+  await browser.route('**/api/runtime-mode', async (route) => {
+    await pending;
+    if (unavailable)
+      return route.fulfill({
+        status: 503,
+        json: { error: { code: 'unavailable', message } },
+      });
+    return route.fallback();
+  });
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.goto('/');
+  const mode = page.getByRole('banner').getByRole('group', { name: 'Runtime Jira action mode' });
+  await expect(mode).toContainText('Checking mode…');
+  await expect(mode).toContainText('Jira actions unavailable');
+  await expect(mode.getByRole('button')).toHaveCount(0);
+  await expect(
+    page.locator('.pr-card').getByRole('button', { name: 'Link to Jira' }),
+  ).toBeDisabled();
+  release();
+  await expect(mode.getByRole('button', { name: 'Switch to Live' })).toBeVisible();
+  unavailable = true;
+  await expect(mode.getByText('Mode unavailable', { exact: true })).toBeVisible();
+  await expect(mode).toContainText(message);
+  await expect(mode.getByRole('button', { name: 'Switch to Live' })).toHaveCount(0);
+  await expect(
+    page.locator('.pr-card').getByRole('button', { name: 'Link to Jira' }),
+  ).toBeDisabled();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page
+    .getByRole('banner')
+    .screenshot({ path: test.info().outputPath('header-unavailable.png') });
+  await mode.getByRole('button', { name: 'Check mode', exact: true }).focus();
+  unavailable = false;
+  await page.keyboard.press('Enter');
+  await expect(mode.getByText('Test mode', { exact: true })).toBeVisible();
+  await expect(mode.getByRole('button', { name: 'Switch to Live' })).toBeEnabled();
+  expect(api.counts()).toMatchObject({ toggles: 0, actionAttempts: 0 });
+});
+
 test('two tabs invalidate edited ticket and require explicit reviewed mode; accepted/null is success', async ({
   context: browser,
   page,

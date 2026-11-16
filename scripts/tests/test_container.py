@@ -73,6 +73,30 @@ else:
         arguments = json.loads(result.stdout)
         self.assertEqual(arguments[arguments.index('-p') + 1], '127.0.0.1:3333:8080')
 
+    @unittest.skipUnless(shutil.which('make') and shutil.which('git'), 'Make/Git unavailable')
+    def test_make_image_passes_git_or_explicit_build_metadata(self):
+        described = subprocess.check_output(
+            ['git', 'describe', '--tags', '--match', 'v[0-9]*', '--always', '--abbrev=12'],
+            cwd=ROOT, text=True,
+        ).strip()
+        environment = self.environment.copy()
+        for variable in ['BUILD_VERSION', 'MAKEFLAGS', 'MFLAGS']:
+            environment.pop(variable, None)
+        for supplied in [None, 'v1.2.3-4-g0123456789ab']:
+            with self.subTest(supplied=supplied):
+                command = ['make', '--no-print-directory', '-s', 'image',
+                           f'CONTAINER_ENGINE={self.directory / "podman"}',
+                           'IMAGE=localhost/pullboard:test']
+                if supplied:
+                    command.append('BUILD_VERSION=' + supplied)
+                result = subprocess.run(command, cwd=ROOT, env=environment,
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                arguments = json.loads(result.stdout)
+                self.assertEqual(arguments[0], 'build')
+                self.assertEqual(arguments[arguments.index('--build-arg') + 1],
+                                 'PULLBOARD_BUILD_VERSION=' + (supplied or described))
+
     def test_custom_port_and_read_only_config_with_spaces(self):
         config = self.directory / 'local config.yaml'
         config.write_text('jira: null\nforges: []\n')

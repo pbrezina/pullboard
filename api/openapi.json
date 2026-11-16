@@ -229,7 +229,7 @@
       "Health": {
         "description": "Mode and mode_revision are sampled atomically from runtime state, not immutable YAML. Do not combine pairs from separate HTTP responses.",
         "type": "object", "additionalProperties": false, "required": ["status", "version", "read_only_test_mode", "mode_revision"],
-        "properties": {"status": {"const": "ok"}, "version": {"type": "string"}, "read_only_test_mode": {"type": "boolean"}, "mode_revision": {"$ref": "#/components/schemas/ModeRevision"}},
+        "properties": {"status": {"const": "ok"}, "version": {"type": "string", "description": "Opaque build identifier for display, not necessarily SemVer: release tag, Git description or commit hash; source archives without build metadata use the package version plus +unknown."}, "read_only_test_mode": {"type": "boolean"}, "mode_revision": {"$ref": "#/components/schemas/ModeRevision"}},
         "examples": [{"status": "ok", "version": "1.2.0", "read_only_test_mode": true, "mode_revision": "mode_mock_boot_a_test_1"}]
       },
       "Project": {

@@ -2,6 +2,8 @@
 
 CONTAINER_ENGINE ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 IMAGE ?= localhost/pullboard:latest
+BUILD_VERSION ?= $(shell git describe --tags --match 'v[0-9]*' --always --abbrev=12 2>/dev/null)
+EXPECTED_VERSION ?=
 CARGO ?= cargo
 NPM ?= npm
 MDBOOK ?= mdbook
@@ -29,13 +31,13 @@ help:
 	@echo 'make e2e-server  Browser smoke against a real local Rust server and production Angular'
 
 image:
-	$(CONTAINER_ENGINE) build -t $(IMAGE) .
+	$(CONTAINER_ENGINE) build --build-arg PULLBOARD_BUILD_VERSION="$(BUILD_VERSION)" -t $(IMAGE) .
 
 run:
 	sh scripts/container-run.sh "$(CONTAINER_ENGINE)" "$(IMAGE)" "$(CONFIG)" "$(PORT)" "$(RUN_NAME)"
 
 smoke:
-	python3 scripts/container-smoke.py --engine "$(CONTAINER_ENGINE)" --image "$(IMAGE)"
+	python3 scripts/container-smoke.py --engine "$(CONTAINER_ENGINE)" --image "$(IMAGE)" --expected-version "$(EXPECTED_VERSION)"
 
 install:
 	cd frontend && $(NPM) ci

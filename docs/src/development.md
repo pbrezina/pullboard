@@ -18,6 +18,16 @@ Run from repository root so the native default static path resolves to
 Toolbox, use `CARGO='toolbox run -c tb-devel cargo'` on Make commands. This is a
 developer transport for a build tool, not application configuration.
 
+The dashboard, `/api/health` and `pullboard --version` share a build identifier from
+`git describe --tags --match 'v[0-9]*' --always --abbrev=12`: an exact release tag,
+tag/distance/commit, or commit hash when no release tag exists. The rolling `nightly`
+tag is ignored. Native Cargo builds detect Git automatically; `make image` and CI
+pass the description as the non-secret Docker build argument `PULLBOARD_BUILD_VERSION`
+without copying `.git`. For source archives, supply `make image BUILD_VERSION=...`
+or `PULLBOARD_BUILD_VERSION=... cargo build --manifest-path backend/Cargo.toml`;
+without metadata the identifier is the package version plus `+unknown`. This is
+compile-time metadata, not a runtime environment setting.
+
 For live reload copy/edit the native YAML, add exact `http://localhost:4200` and/or
 `http://127.0.0.1:4200` to `server.allowed_origins`, and run these separately:
 

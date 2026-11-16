@@ -19,6 +19,11 @@ unless explicitly documented otherwise.
 
 ## Endpoints
 
+`Health.version` is an opaque display build identifier, not necessarily SemVer.
+Builds use a release tag, Git description (tag/distance/commit), or commit hash,
+excluding the rolling `nightly` tag. Source archives without supplied build metadata
+report the package version with `+unknown`. The UI displays this string unchanged.
+
 | Method | Path | Request | Success |
 |---|---|---|---|
 | GET | `/api/health` | none | 200 `Health` |

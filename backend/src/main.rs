@@ -10,7 +10,7 @@ use tracing_subscriber::{Layer, filter::Targets, layer::SubscriberExt, util::Sub
 
 #[derive(Parser)]
 #[command(
-    version,
+    version = pullboard::VERSION,
     about = "Local PullBoard server (one YAML configuration file)"
 )]
 struct Cli {

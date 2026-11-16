@@ -94,6 +94,11 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Identify build
+        id: version
+        run: echo "version=$(git describe --tags --match 'v[0-9]*' --always --abbrev=12)" >> "$GITHUB_OUTPUT"
       - run: make test-container
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
@@ -102,6 +107,9 @@ jobs:
           load: true
           push: false
           tags: localhost/pullboard:ci
+          build-args: PULLBOARD_BUILD_VERSION=${{ steps.version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - run: make smoke CONTAINER_ENGINE=docker IMAGE=localhost/pullboard:ci
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}

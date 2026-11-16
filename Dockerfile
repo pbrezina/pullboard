@@ -10,12 +10,14 @@ FROM docker.io/library/rust:1.99.1-alpine AS backend
 RUN apk add --no-cache build-base cmake pkgconf sqlite-dev
 WORKDIR /build
 COPY backend/Cargo.toml backend/Cargo.lock ./backend/
+COPY backend/build.rs ./backend/
 COPY backend/src/ ./backend/src/
 COPY crates/pullboard-core/Cargo.toml ./crates/pullboard-core/
 COPY crates/pullboard-core/src/ ./crates/pullboard-core/src/
 COPY api/ ./api/
 WORKDIR /build/backend
-RUN cargo build --release --locked
+ARG PULLBOARD_BUILD_VERSION
+RUN PULLBOARD_BUILD_VERSION="$PULLBOARD_BUILD_VERSION" cargo build --release --locked
 # Keep runtime dependencies honest: bundled SQLite and Rust TLS need no OpenSSL.
 RUN ldd target/release/pullboard || test "$?" -eq 1
 

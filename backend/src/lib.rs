@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 //! PullBoard's local API, ephemeral cache and read-only upstream adapters.
 
+/// Build-time Git description (or an explicitly unknown source-archive version).
+pub const VERSION: &str = env!("PULLBOARD_BUILD_VERSION");
+
 pub mod ai;
 pub mod api;
 pub mod attention;

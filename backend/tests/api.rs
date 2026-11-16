@@ -43,6 +43,23 @@ async fn call(
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 #[tokio::test]
+async fn health_and_cli_report_the_same_build_identifier() {
+    let app = App::build(config()).await.unwrap();
+    let (status, health) = call(app, "GET", "/api/health", json!({}), None, false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(health["version"], pullboard::VERSION);
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pullboard"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        format!("pullboard {}", pullboard::VERSION)
+    );
+}
+
+#[tokio::test]
 async fn empty_safe_instance_contract_and_json_routes() {
     let app = App::build(config()).await.unwrap();
     for (path, name) in [

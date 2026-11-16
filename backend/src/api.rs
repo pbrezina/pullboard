@@ -187,7 +187,7 @@ async fn health(State(app): State<Arc<App>>) -> Json<Health> {
     let mode = app.mode.read();
     Json(Health {
         status: "ok".into(),
-        version: env!("CARGO_PKG_VERSION").into(),
+        version: crate::VERSION.into(),
         read_only_test_mode: mode.read_only_test_mode,
         mode_revision: mode.mode_revision,
     })

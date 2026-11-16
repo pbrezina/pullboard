@@ -12,6 +12,7 @@ import uuid
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--engine', default='podman')
 parser.add_argument('--image', default='localhost/pullboard:latest')
+parser.add_argument('--expected-version', default='')
 args = parser.parse_args()
 name = 'pullboard-smoke-' + uuid.uuid4().hex[:12]
 created = False
@@ -71,7 +72,11 @@ try:
     assert command('exec', name, 'id', '-u') == '10001'
     assert command('exec', name, 'cat', '/proc/1/comm') == 'pullboard'
     assert command('exec', name, 'stat', '-c', '%u:%g %a', '/data') == '10001:10001 700'
-    assert json.loads(body)['read_only_test_mode'] is True
+    health = json.loads(body)
+    assert health['read_only_test_mode'] is True
+    assert command('exec', name, 'pullboard', '--version') == 'pullboard ' + health['version']
+    if args.expected_version:
+        assert health['version'] == args.expected_version, health['version']
     assert headers.get('Cache-Control') == 'no-store'
     status, headers, body = request('/')
     assert status == 200 and b'<app-root' in body

@@ -388,11 +388,10 @@ before installation. Installation writes:
 
 Files/backups are owner-only (0600); newly created private directories are 0700.
 Comments need not survive serialization. Symlinks, external edits, unrelated custom
-units/drop-ins and unverifiable existing containers are refused rather than silently
-overwritten. The sole vendor drop-in exception is Fedora's root-owned
-`/usr/lib/systemd/user/service.d/10-timeout-abort.conf`, verified to contain only
-`[Service]` and `TimeoutStopFailureMode=abort` (plus comments). Other directives,
-user/admin replacements and unrelated overrides remain unsupported.
+units and unverifiable existing containers are refused rather than silently
+overwritten. Setup verifies that the service is generated from its supported Quadlet.
+Existing systemd drop-ins, including desktop resource policies and user/admin
+overrides, are preserved and continue to apply; their presence does not block setup.
 No automatic plaintext fallback is provided for existing keyring references;
 the disposable setup has no native keyring service support. Use the separate
 [restricted bridge guide](keyring-container.md) for a deliberate manual keyring deployment.

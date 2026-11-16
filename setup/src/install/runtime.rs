@@ -2,7 +2,7 @@ use super::{
     CANCELLED, Command, CommandOutput, CommandRunner, InstallError, MAX_FILE, Paths,
     ReadinessProbe, SourceStatus, SourceSummary, check_cancel,
 };
-use std::{io::Read, os::unix::fs::MetadataExt, path::Path, process::Stdio, time::Duration};
+use std::{path::Path, process::Stdio, time::Duration};
 use tokio::{io::AsyncReadExt, process::Command as Process};
 use tokio_util::sync::CancellationToken;
 
@@ -104,7 +104,7 @@ fn invocation(command: Command) -> Result<(&'static str, Vec<&'static str>), Ins
                 "--user",
                 "show",
                 "pullboard.service",
-                "--property=LoadState,ActiveState,SourcePath,FragmentPath,InvocationID,DropInPaths",
+                "--property=LoadState,ActiveState,SourcePath,FragmentPath,InvocationID",
             ],
         ),
         Command::GraphicalStatus => (
@@ -179,14 +179,8 @@ pub(super) fn service(output: &CommandOutput, paths: &Paths) -> Result<Service, 
             "could not inspect the generated user service; resolve masked or invalid pullboard.service manually",
         ));
     }
-    if fields
-        .get("DropInPaths")
-        .is_none_or(|paths| !safe_dropins(paths))
-    {
-        return Err(InstallError(
-            "existing service has custom or unverifiable drop-ins; preserve them and resolve manually before setup",
-        ));
-    }
+    // Drop-ins remain under systemd/user control and are preserved by setup.
+    // Verify the generated base unit's ownership rather than restricting overrides.
     // Never replace/start a same-named hand-written unit, including an inactive one.
     let source = fields.get("SourcePath").ok_or(InstallError(
         "existing service ownership could not be verified",
@@ -238,52 +232,6 @@ pub(super) fn service(output: &CommandOutput, paths: &Paths) -> Result<Service, 
         invocation,
         changing: !matches!(active, "active" | "inactive" | "failed"),
     })
-}
-
-// Fedora ships this global package policy for every user service. Accept only the
-// verified root-owned regular file containing its one timeout directive, not an
-// arbitrary vendor override or a same-named user/admin replacement.
-const VENDOR_TIMEOUT_DROPIN: &str = "/usr/lib/systemd/user/service.d/10-timeout-abort.conf";
-fn safe_dropins(paths: &str) -> bool {
-    paths.split_whitespace().all(|path| {
-        if path != VENDOR_TIMEOUT_DROPIN {
-            return false;
-        }
-        let Ok(fd) = rustix::fs::open(
-            path,
-            rustix::fs::OFlags::RDONLY
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::NONBLOCK
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-        ) else {
-            return false;
-        };
-        let file = std::fs::File::from(fd);
-        let Ok(metadata) = file.metadata() else {
-            return false;
-        };
-        if !metadata.is_file()
-            || metadata.uid() != 0
-            || metadata.mode() & 0o022 != 0
-            || metadata.len() > 8192
-        {
-            return false;
-        }
-        let mut contents = String::new();
-        if file.take(8193).read_to_string(&mut contents).is_err() || contents.len() > 8192 {
-            return false;
-        }
-        safe_timeout_policy(&contents)
-    })
-}
-
-fn safe_timeout_policy(contents: &str) -> bool {
-    contents
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with(['#', ';']))
-        .eq(["[Service]", "TimeoutStopFailureMode=abort"])
 }
 
 pub(super) fn owns_port(stdout: &str, port: u16) -> bool {
@@ -452,36 +400,6 @@ fn parse_sources(value: &serde_json::Value) -> Option<Vec<SourceSummary>> {
 mod tests {
     use super::*;
     use crate::install::Channel;
-    #[test]
-    fn standard_vendor_timeout_policy_does_not_admit_custom_overrides() {
-        assert!(safe_dropins(""));
-        assert!(safe_timeout_policy(
-            "# vendor policy\n\n[Service]\nTimeoutStopFailureMode=abort\n"
-        ));
-        for contents in [
-            "[Service]\nTimeoutStopFailureMode=abort\nExecStart=/bin/false\n",
-            "[Service]\nTimeoutStopFailureMode=kill\n",
-            "[Service]\nTimeoutStopFailureMode=abort\n[Unit]\nDescription=custom\n",
-            "[Service]\nNoNewPrivileges=false\n",
-        ] {
-            assert!(!safe_timeout_policy(contents));
-        }
-        for path in [
-            "/etc/systemd/user/service.d/10-timeout-abort.conf",
-            "/usr/lib/systemd/user/service.d/other.conf",
-            "/usr/lib/systemd/user/pullboard.service.d/custom.conf",
-        ] {
-            assert!(!safe_dropins(path));
-        }
-        // Host validation is read-only. On Fedora this checks the actual packaged
-        // policy; other distributions need not carry this optional vendor file.
-        if Path::new(VENDOR_TIMEOUT_DROPIN).exists() {
-            let text = std::fs::read_to_string(VENDOR_TIMEOUT_DROPIN).unwrap();
-            if safe_timeout_policy(&text) {
-                assert!(safe_dropins(VENDOR_TIMEOUT_DROPIN));
-            }
-        }
-    }
     #[test]
     fn container_checks_use_the_explicit_name_and_limit_legacy_inspection() {
         let (_, args) = invocation(Command::ContainerStatus).unwrap();

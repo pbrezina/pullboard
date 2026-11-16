@@ -72,7 +72,7 @@ impl CommandRunner for FakeRunner {
             Command::GraphicalStatus => if self.graphical { "active" } else { "inactive" }.into(),
             Command::ServiceStatus => {
                 if self.present.load(Ordering::SeqCst) {
-                    format!("LoadState=loaded\nActiveState={}\nSourcePath={}\nFragmentPath=/run/user/{}/systemd/generator/pullboard.service\nInvocationID={:032x}\nDropInPaths=\n", if self.running.load(Ordering::SeqCst) { "active" } else { "inactive" }, self.paths.quadlet().display(), rustix::process::geteuid().as_raw(), self.invocation.load(Ordering::SeqCst))
+                    format!("LoadState=loaded\nActiveState={}\nSourcePath={}\nFragmentPath=/run/user/{}/systemd/generator/pullboard.service\nInvocationID={:032x}\n", if self.running.load(Ordering::SeqCst) { "active" } else { "inactive" }, self.paths.quadlet().display(), rustix::process::geteuid().as_raw(), self.invocation.load(Ordering::SeqCst))
                 } else { "LoadState=not-found\nActiveState=inactive\nSourcePath=\nFragmentPath=\nInvocationID=\n".into() }
             }
             Command::ContainerStatus | Command::LegacyContainerStatus => serde_json::json!({"State":{"Running":true},"Config":{"Labels":{"PODMAN_SYSTEMD_UNIT":"pullboard.service"}},"NetworkSettings":{"Ports":{"8080/tcp":[{"HostIp":"127.0.0.1","HostPort":self.own_port.map(|p| p.to_string()).unwrap_or_default()}]}}}).to_string(),
@@ -1049,6 +1049,58 @@ fn home_path_and_unrelated_unit_validation_fail_closed() {
 }
 
 #[test]
+fn service_dropins_are_allowed_without_relaxing_base_unit_ownership() {
+    let (_temp, paths) = home();
+    let uid = rustix::process::geteuid().as_raw();
+    let source = paths.quadlet();
+    let fragment = format!("/run/user/{uid}/systemd/generator/pullboard.service");
+    for dropins in [
+        String::new(),
+        "DropInPaths=\n".into(),
+        format!(
+            "DropInPaths=/usr/lib/systemd/user/service.d/10-timeout-abort.conf /run/user/{uid}/systemd/user.control/pullboard.service.d/50-CPUWeight.conf /run/user/{uid}/systemd/user.control/pullboard.service.d/50-IOWeight.conf\n"
+        ),
+        "DropInPaths=/etc/systemd/user/pullboard.service.d/custom.conf\n".into(),
+    ] {
+        let stdout = format!(
+            "LoadState=loaded\nActiveState=inactive\nSourcePath={}\nFragmentPath={fragment}\nInvocationID=\n{dropins}",
+            source.display(),
+        );
+        let service = runtime::service(
+            &CommandOutput {
+                success: true,
+                stdout: stdout.clone(),
+            },
+            &paths,
+        )
+        .unwrap();
+        assert!(service.loaded);
+        assert!(!service.running);
+        for unrelated in [
+            stdout.replace(
+                &format!("SourcePath={}", source.display()),
+                "SourcePath=/other/pullboard.container",
+            ),
+            stdout.replace(
+                &format!("FragmentPath={fragment}"),
+                "FragmentPath=/etc/systemd/user/pullboard.service",
+            ),
+        ] {
+            assert!(
+                runtime::service(
+                    &CommandOutput {
+                        success: true,
+                        stdout: unrelated,
+                    },
+                    &paths,
+                )
+                .is_err()
+            );
+        }
+    }
+}
+
+#[test]
 fn resolves_parent_home_aliases_but_rejects_a_symlinked_home_itself() {
     let (temp, real_paths) = home();
     let parent = test_temp("installer-parent-");
@@ -1113,7 +1165,7 @@ fn transitional_existing_service_is_not_treated_as_stopped_or_newly_ready() {
         let output = CommandOutput {
             success: true,
             stdout: format!(
-                "LoadState=loaded\nActiveState={active}\nSourcePath={}\nFragmentPath=/run/user/{}/systemd/generator/pullboard.service\nInvocationID={:032x}\nDropInPaths=\n",
+                "LoadState=loaded\nActiveState={active}\nSourcePath={}\nFragmentPath=/run/user/{}/systemd/generator/pullboard.service\nInvocationID={:032x}\n",
                 paths.quadlet().display(),
                 rustix::process::geteuid().as_raw(),
                 1

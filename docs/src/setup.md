@@ -300,14 +300,23 @@ Setup preserves saved policies when editing an existing configuration.
 
 ### Forges
 
-Walk through saved instances or add another: provider, URL, token and verification.
-New instances receive stable IDs automatically; existing IDs are retained.
+Walk through saved instances or add another: provider, display name, URL, token and
+verification. The editable name defaults to the forge kind, such as `github`;
+additional instances of the same kind default to `github-2`, `github-3`, and so on.
+Generated names skip names already in use. Adding another instance does not rename
+the first. Saved custom names are preserved; editing an unnamed singleton suggests
+the kind name instead of its ID.
+New instances receive stable IDs automatically; existing IDs are retained, even
+when changing the display name.
 At any forge prompt, **Esc** discards the current draft and returns to forge
 management. Cancelling an edit preserves the existing forge unchanged; cancelling
 a new account does not add it. **Ctrl-C** still exits the whole setup.
 GitHub uses its API base (`https://api.github.com`); GitLab, Codeberg and Forgejo
-use instance roots. Repository include/exclude globs narrow account discovery,
-not token scope. Private repositories need actual credential access.
+use instance roots. Repository include/exclude globs and a forge's default Jira
+project are YAML-only settings, preserved when editing an existing configuration
+(apart from confirmed cleanup of links to removed Jira projects). New instances
+use no repository filters and the primary Jira project. Repository globs narrow
+account discovery, not token scope. Private repositories need actual credential access.
 
 | Provider | Token creation/help | Permissions and caveats |
 | --- | --- | --- |
@@ -353,9 +362,9 @@ choices, with plain output under `--no-color` or `NO_COLOR=1`. Esc at a forge pr
 discards only that forge draft. Ctrl-C always cancels setup. Secrets stay masked
 and are never included in completed-answer summaries.
 
-Discovered values are suggested when available. Optional repository filters and a
-forge's default Jira project are behind **Configure advanced repository filters/default
-Jira project?**, default No; skipping them preserves saved settings. Failed connections
+Discovered values are suggested when available. Advanced repository filters and
+default Jira project settings are not prompted for; customize them in the
+[YAML configuration](configuration.md). Failed connections
 offer only **Retry / Change answers / Skip this integration**. There is no
 save-unverified path. Unfinished settings stay
 in memory, and nothing is installed until you choose a final installation action.

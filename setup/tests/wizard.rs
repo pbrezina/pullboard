@@ -462,6 +462,12 @@ async fn configured(a: &mut Wizard, p: &mut Script, d: &MockDiscovery) {
     a.configure(p, d, &CancellationToken::new()).await.unwrap();
     p.done();
     a.config.validate().unwrap();
+    for (question, _) in &p.defaults {
+        assert!(!question.starts_with("Configure advanced repository"));
+        assert!(!question.starts_with("Include repository"));
+        assert!(!question.starts_with("Exclude repository"));
+        assert!(!question.starts_with("Default Jira project"));
+    }
 }
 
 #[tokio::test]
@@ -793,9 +799,9 @@ async fn edited_project_removal_is_deliberate_and_preserves_nonorphaned_advanced
         Enter("Sprint pattern actions"),
         Confirm("Configure existing forge", true),
         Select("Forge provider", 0),
+        Enter("Forge name"),
         Text("Forge URL", "<default>"),
         Password(true, ""),
-        Confirm("Configure advanced repository", false),
     ];
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);
@@ -1563,9 +1569,9 @@ async fn supplied_project_removal_explicitly_cleans_dependents_and_preserves_oth
         Confirm("Edit Jira settings", false),
         Confirm("Configure existing forge", true),
         Select("Forge provider", 0),
+        Enter("Forge name"),
         Text("Forge URL", "<default>"),
         Password(true, ""),
-        Confirm("Configure advanced repository", false),
     ];
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);
@@ -1659,15 +1665,15 @@ async fn supplied_review_can_return_to_editable_wizard_without_reapplying_argume
 }
 
 #[tokio::test]
-async fn new_forge_is_provider_url_token_verify_then_add_another_no_default_with_stable_ids() {
+async fn new_forge_is_provider_name_url_token_verify_then_add_another_no_default_with_stable_ids() {
     let mut a = app();
     let mut steps = vec![
         Confirm("Configure Jira", false),
         Confirm("Add a forge account", true),
         Select("Forge provider", 1),
+        Enter("Forge name"),
         Text("Forge URL", "<default>"),
         Password(false, "synthetic-forge-token"),
-        Confirm("Configure advanced repository", false),
         Confirm("Add another forge", false),
         Select("AI provider", 0),
     ];
@@ -1679,13 +1685,237 @@ async fn new_forge_is_provider_url_token_verify_then_add_another_no_default_with
     let f = &a.config.forges[0];
     assert_eq!(f.kind, Kind::Gitlab);
     assert_eq!(f.id, "gitlab-1");
+    assert_eq!(f.name.as_deref(), Some("gitlab"));
     assert_eq!(f.base_url, "https://gitlab.com");
+    assert!(f.include_repositories.is_empty());
+    assert!(f.exclude_repositories.is_empty());
+    assert!(f.default_project.is_none());
     assert_eq!(next_source_id(Kind::Gitlab, &a.config.forges), "gitlab-2");
     assert!(
         p.defaults
             .contains(&("Add another forge?".into(), "false".into()))
     );
     assert_eq!(d.forges.borrow().len(), 1);
+}
+
+#[tokio::test]
+async fn every_forge_kind_defaults_its_display_name_to_the_kind() {
+    for (provider, kind, name) in [
+        (0, Kind::Github, "github"),
+        (1, Kind::Gitlab, "gitlab"),
+        (2, Kind::Codeberg, "codeberg"),
+        (3, Kind::Forgejo, "forgejo"),
+    ] {
+        let mut a = app();
+        let mut steps = vec![
+            Confirm("Configure Jira", false),
+            Confirm("Add a forge account", true),
+            Select("Forge provider", provider),
+            Enter("Forge name"),
+            Text("Forge URL", "https://forge.example.invalid"),
+            Password(false, "synthetic-token"),
+            Confirm("Add another forge", false),
+            Select("AI provider", 0),
+        ];
+        steps.extend(runtime());
+        let mut p = Script::new(steps);
+        configured(&mut a, &mut p, &MockDiscovery::default()).await;
+        let f = &a.config.forges[0];
+        assert_eq!(f.kind, kind);
+        assert_eq!(f.name.as_deref(), Some(name));
+        assert_eq!(f.id, format!("{name}-1"));
+        assert!(p.defaults.contains(&("Forge name:".into(), name.into())));
+    }
+}
+
+#[tokio::test]
+async fn multiple_forge_names_are_numbered_per_kind_without_renaming_the_first() {
+    let mut a = app();
+    let mut steps = vec![
+        Confirm("Configure Jira", false),
+        Confirm("Add a forge account", true),
+    ];
+    for (at, provider) in [0, 0, 1, 0].into_iter().enumerate() {
+        steps.extend([
+            Select("Forge provider", provider),
+            Enter("Forge name"),
+            Enter("Forge URL"),
+            Password(false, "synthetic-token"),
+            Confirm("Add another forge", at < 3),
+        ]);
+    }
+    steps.push(Select("AI provider", 0));
+    steps.extend(runtime());
+    let mut p = Script::new(steps);
+    configured(&mut a, &mut p, &MockDiscovery::default()).await;
+    assert_eq!(
+        a.config
+            .forges
+            .iter()
+            .map(|f| (f.id.as_str(), f.name()))
+            .collect::<Vec<_>>(),
+        [
+            ("github-1", "github"),
+            ("github-2", "github-2"),
+            ("gitlab-1", "gitlab"),
+            ("github-3", "github-3"),
+        ]
+    );
+    assert!(a.summary().join("\n").contains("Forge: github (github-1)"));
+    a.config.forges.remove(0);
+    let before = serde_json::to_value(&a.config.forges).unwrap();
+    let mut steps = vec![Confirm("Configure Jira", false)];
+    for _ in &a.config.forges {
+        steps.extend([
+            Confirm("Configure existing forge", true),
+            Enter("Forge provider"),
+            Enter("Forge name"),
+            Enter("Forge URL"),
+            Password(true, ""),
+        ]);
+    }
+    steps.extend(disabled_tail());
+    let mut p = Script::new(steps);
+    configured(&mut a, &mut p, &MockDiscovery::default()).await;
+    assert_eq!(serde_json::to_value(&a.config.forges).unwrap(), before);
+}
+
+#[tokio::test]
+async fn editing_preserves_custom_names_and_gives_unnamed_singletons_the_kind_name() {
+    for (saved_name, answer, expected) in [
+        (None, "<default>", "github"),
+        (Some("Personal"), "<default>", "Personal"),
+        (Some("Personal"), "Work GitHub", "Work GitHub"),
+    ] {
+        let mut a = app();
+        a.config = fixture();
+        a.config.jira = None;
+        let f = &mut a.config.forges[0];
+        f.id = "github-1".into();
+        f.name = saved_name.map(str::to_owned);
+        f.default_project = None;
+        let mut steps = vec![
+            Confirm("Configure Jira", false),
+            Confirm("Configure existing forge", true),
+            Enter("Forge provider"),
+            Text("Forge name", answer),
+            Enter("Forge URL"),
+            Password(true, ""),
+        ];
+        steps.extend(disabled_tail());
+        let mut p = Script::new(steps);
+        configured(&mut a, &mut p, &MockDiscovery::default()).await;
+        let saved = Config::from_yaml(&a.config.to_yaml().unwrap()).unwrap();
+        assert_eq!(saved.forges[0].id, "github-1");
+        assert_eq!(saved.forges[0].name.as_deref(), Some(expected));
+        assert!(
+            p.defaults
+                .contains(&("Forge name:".into(), saved_name.unwrap_or("github").into()))
+        );
+    }
+}
+
+#[tokio::test]
+async fn editing_multiple_unnamed_forges_uses_their_kind_order_not_their_stable_ids() {
+    let mut a = app();
+    a.config = fixture();
+    a.config.jira = None;
+    a.config.forges[0].name = None;
+    a.config.forges[0].default_project = None;
+    let mut second = a.config.forges[0].clone();
+    second.id = "stable-two".into();
+    a.config.forges.push(second);
+    let mut steps = vec![Confirm("Configure Jira", false)];
+    for _ in 0..2 {
+        steps.extend([
+            Confirm("Configure existing forge", true),
+            Enter("Forge provider"),
+            Enter("Forge name"),
+            Enter("Forge URL"),
+            Password(true, ""),
+        ]);
+    }
+    steps.extend(disabled_tail());
+    let mut p = Script::new(steps);
+    configured(&mut a, &mut p, &MockDiscovery::default()).await;
+    assert_eq!(a.config.forges[0].id, "stable-one");
+    assert_eq!(a.config.forges[0].name(), "github");
+    assert_eq!(a.config.forges[1].id, "stable-two");
+    assert_eq!(a.config.forges[1].name(), "github-2");
+}
+
+#[tokio::test]
+async fn generated_forge_names_skip_collisions_and_preserve_existing_custom_names() {
+    let mut a = app();
+    a.config = fixture();
+    a.config.jira = None;
+    a.config.forges[0].name = Some("github-2".into());
+    a.config.forges[0].default_project = None;
+    let mut steps = vec![
+        Confirm("Configure Jira", false),
+        Confirm("Configure existing forge", true),
+        Enter("Forge provider"),
+        Enter("Forge name"),
+        Enter("Forge URL"),
+        Password(true, ""),
+        Confirm("Add a forge account", true),
+        Enter("Forge provider"),
+        Enter("Forge name"),
+        Enter("Forge URL"),
+        Password(false, "synthetic-token"),
+        Confirm("Add another forge", false),
+        Select("AI provider", 0),
+    ];
+    steps.extend(runtime());
+    let mut p = Script::new(steps);
+    configured(&mut a, &mut p, &MockDiscovery::default()).await;
+    assert_eq!(a.config.forges[0].name(), "github-2");
+    assert_eq!(a.config.forges[1].name(), "github-3");
+}
+
+#[tokio::test]
+async fn custom_forge_name_is_trimmed_validated_and_retained_when_changing_answers() {
+    let mut a = app();
+    let d = MockDiscovery::default();
+    d.forge_failures.borrow_mut().push_back(true);
+    let mut steps = vec![
+        Confirm("Configure Jira", false),
+        Confirm("Add a forge account", true),
+        Enter("Forge provider"),
+        Text("Forge name", ""),
+        Text("Forge name", " \t "),
+        Text("Forge name", "  Work GitHub  "),
+        Enter("Forge URL"),
+        Password(false, "synthetic-token"),
+        Select("Connection failed", 1),
+        Enter("Forge provider"),
+        Enter("Forge name"),
+        Enter("Forge URL"),
+        Password(true, ""),
+        Confirm("Add another forge", false),
+        Select("AI provider", 0),
+    ];
+    steps.extend(runtime());
+    let mut p = Script::new(steps);
+    configured(&mut a, &mut p, &d).await;
+    assert_eq!(a.config.forges[0].name.as_deref(), Some("Work GitHub"));
+    assert_eq!(a.config.forges[0].id, "github-1");
+    assert_eq!(d.forges.borrow().len(), 2);
+    assert!(d.forges.borrow().iter().all(|f| f.name() == "Work GitHub"));
+    assert!(
+        p.defaults
+            .contains(&("Forge name:".into(), "Work GitHub".into()))
+    );
+    assert!(
+        p.transcript
+            .iter()
+            .any(|s| s.contains("nonempty display name"))
+    );
+    assert!(
+        a.summary()
+            .join("\n")
+            .contains("Forge: Work GitHub (github-1)")
+    );
 }
 
 #[tokio::test]
@@ -1698,6 +1928,7 @@ async fn failed_existing_forge_skip_explicitly_removes_it_without_retaining_unve
         Confirm("Configure Jira", false),
         Confirm("Configure existing forge", true),
         Select("Forge provider", 0),
+        Enter("Forge name"),
         Text("Forge URL", "<default>"),
         Password(true, ""),
         Select("Connection failed", 2),
@@ -1947,6 +2178,7 @@ async fn saved_forge_destination_change_never_calls_discovery_before_consent() {
         Confirm("Configure Jira", false),
         Confirm("Configure existing forge", true),
         Select("Forge provider", 0),
+        Enter("Forge name"),
         Text("Forge URL", "https://github-enterprise.invalid/api/v3"),
         Password(true, ""),
         Cancel("Send the saved"),
@@ -1963,7 +2195,7 @@ async fn saved_forge_destination_change_never_calls_discovery_before_consent() {
 
 #[tokio::test]
 async fn escape_discards_new_forge_at_every_prompt_and_allows_adding_another() {
-    for stage in 0..9 {
+    for stage in 0..6 {
         let mut a = app();
         let d = MockDiscovery::default();
         let mut steps = vec![
@@ -1972,35 +2204,26 @@ async fn escape_discards_new_forge_at_every_prompt_and_allows_adding_another() {
         ];
         let prefix = vec![
             Select("Forge provider", 0),
+            Text("Forge name", "Discarded forge"),
             Enter("Forge URL"),
             Password(false, "discarded-secret"),
-            Confirm("Configure advanced repository", true),
-            Text("Include repository", "org/*"),
-            Enter("Exclude repository"),
         ];
-        if stage < 7 {
-            let questions = [
-                "Forge provider",
-                "Forge URL",
-                "Token",
-                "Configure advanced repository",
-                "Include repository",
-                "Exclude repository",
-                "Default Jira project",
-            ];
+        if stage < 4 {
+            let questions = ["Forge provider", "Forge name", "Forge URL", "Token"];
             steps.extend(prefix.into_iter().take(stage));
             steps.push(Escape(questions[stage]));
-        } else if stage == 7 {
+        } else if stage == 4 {
             d.forge_failures.borrow_mut().push_back(true);
-            steps.extend(prefix.into_iter().take(3));
+            steps.extend(prefix);
             steps.push(Escape("Connection failed"));
         } else {
             // Consent is required when retrying with a token for a new destination.
             d.forge_failures.borrow_mut().push_back(true);
-            steps.extend(prefix.into_iter().take(3));
+            steps.extend(prefix);
             steps.extend([
                 Select("Connection failed", 1),
                 Select("Forge provider", 0),
+                Text("Forge name", "Changed draft name"),
                 Text("Forge URL", "https://enterprise.invalid/api/v3"),
                 Password(true, ""),
                 Escape("Send the saved"),
@@ -2009,9 +2232,9 @@ async fn escape_discards_new_forge_at_every_prompt_and_allows_adding_another() {
         steps.extend([
             Confirm("Add another forge", true),
             Select("Forge provider", 1),
+            Enter("Forge name"),
             Enter("Forge URL"),
             Password(false, "kept-secret"),
-            Confirm("Configure advanced repository", false),
             Confirm("Add another forge", false),
             Select("AI provider", 0),
         ]);
@@ -2021,7 +2244,11 @@ async fn escape_discards_new_forge_at_every_prompt_and_allows_adding_another() {
         assert!(!p.local_cancel);
         assert_eq!(a.config.forges.len(), 1);
         assert_eq!(a.config.forges[0].id, "gitlab-1");
-        assert!(!a.summary().join("\n").contains("github-1"));
+        assert_eq!(a.config.forges[0].name(), "gitlab");
+        let summary = a.summary().join("\n");
+        assert!(!summary.contains("github-1"));
+        assert!(!summary.contains("Discarded forge"));
+        assert!(!summary.contains("Changed draft name"));
         assert!(!p.transcript.join("\n").contains("discarded-secret"));
     }
 }
@@ -2038,6 +2265,7 @@ async fn escape_existing_forge_keeps_original_config_and_ctrl_c_still_exits() {
             Confirm("Configure Jira", false),
             Confirm("Configure existing forge", true),
             Select("Forge provider", 1),
+            Text("Forge name", "Discarded rename"),
             Enter("Forge URL"),
         ];
         steps.push(if escape {
@@ -2220,7 +2448,7 @@ async fn failed_or_empty_own_groups_allow_manual_setup_without_automatic_full_sc
 }
 
 #[tokio::test]
-async fn wizard_edits_preserve_saved_jira_policies_and_skipped_repository_filters_exactly() {
+async fn wizard_edits_preserve_saved_jira_policies_and_yaml_only_forge_settings_exactly() {
     use pullboard_core::{
         config::{PurposeDefaults, PurposePolicy},
         model::Workflow,
@@ -2229,6 +2457,7 @@ async fn wizard_edits_preserve_saved_jira_policies_and_skipped_repository_filter
     a.config = fixture();
     a.config.jira.as_mut().unwrap().projects = vec!["ONE".into()];
     a.config.forges[0].default_project = Some("ONE".into());
+    a.config.forges[0].exclude_repositories = vec!["org/excluded-*".into()];
     a.config.jira.as_mut().unwrap().defaults.implementation = Some(PurposePolicy {
         issue_type: "Custom task".into(),
         assignee: Some("me".into()),
@@ -2281,9 +2510,9 @@ async fn wizard_edits_preserve_saved_jira_policies_and_skipped_repository_filter
         Enter("Sprint pattern actions"),
         Confirm("Configure existing forge", true),
         Select("Forge provider", 0),
+        Enter("Forge name"),
         Text("Forge URL", "<default>"),
         Password(true, ""),
-        Confirm("Configure advanced repository", false),
     ];
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);
@@ -2643,9 +2872,9 @@ async fn unverified_saved_projects_cannot_be_saved_or_silently_removed_and_remov
         Enter("Sprint pattern actions"),
         Confirm("Configure existing forge", true),
         Select("Forge provider", 0),
+        Enter("Forge name"),
         Enter("Forge URL"),
         Password(true, ""),
-        Confirm("Configure advanced repository", false),
     ];
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);

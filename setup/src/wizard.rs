@@ -1918,6 +1918,26 @@ impl Wizard {
                 )
                 .await?;
             let kind = *kinds.get(selected).context("invalid forge provider")?;
+            let default_name = draft
+                .as_ref()
+                .and_then(|f| f.name.clone())
+                .unwrap_or_else(|| {
+                    default_forge_name(
+                        kind,
+                        &self.config.forges,
+                        old.as_ref().map(|f| f.id.as_str()),
+                    )
+                });
+            let name = text(
+                p,
+                "Forge name:",
+                &default_name,
+                |s| !s.trim().is_empty(),
+                "Enter a nonempty display name for this forge.",
+            )
+            .await?
+            .trim()
+            .to_owned();
             let default_url = draft
                 .as_ref()
                 .filter(|f| f.kind == kind)
@@ -1964,6 +1984,7 @@ impl Wizard {
                 exclude_repositories: vec![],
                 default_project: None,
             });
+            f.name = Some(name);
             f.kind = kind;
             f.base_url = base_url;
             f.token = token;
@@ -1989,54 +2010,6 @@ impl Wizard {
                 }
             };
             p.say(&format!("Verified identity: {identity}. Full repository/PR/issue permissions will be checked during runtime discovery."));
-            if p.confirm(
-                "Configure advanced repository filters/default Jira project?",
-                false,
-            )
-            .await?
-            {
-                loop {
-                    let mut candidate = f.clone();
-                    candidate.include_repositories = comma(
-                        &p.text(
-                            "Include repository globs (blank = all):",
-                            &f.include_repositories.join(","),
-                        )
-                        .await?,
-                    );
-                    candidate.exclude_repositories = comma(
-                        &p.text(
-                            "Exclude repository globs:",
-                            &f.exclude_repositories.join(","),
-                        )
-                        .await?,
-                    );
-                    let mut projects = choices(&["Primary Jira project (default)"]);
-                    projects.extend(
-                        self.config
-                            .jira
-                            .iter()
-                            .flat_map(|j| j.projects.iter())
-                            .map(|s| Choice::new(s, s)),
-                    );
-                    let chosen = p
-                        .select(
-                            "Default Jira project:",
-                            &projects,
-                            index(&projects, f.default_project.as_deref().unwrap_or("")),
-                        )
-                        .await?;
-                    candidate.default_project = (chosen > 0).then(|| projects[chosen].id.clone());
-                    let mut config = self.config.clone();
-                    config.forges.retain(|a| a.id != candidate.id);
-                    config.forges.push(candidate.clone());
-                    if config.validate().is_ok() {
-                        f = candidate;
-                        break;
-                    }
-                    p.say("Invalid repository filters; use valid repository globs.");
-                }
-            }
             self.identities.insert(f.id.clone(), identity);
             return Ok(Some(f));
         }
@@ -2226,7 +2199,8 @@ impl Wizard {
         }
         for f in &self.config.forges {
             lines.push(format!(
-                "Forge: {} · {} · {}",
+                "Forge: {} ({}) · {} · {}",
+                f.name(),
                 f.id,
                 kind_name(f.kind),
                 f.base_url
@@ -2284,13 +2258,6 @@ fn team_fields(catalog: &Catalog) -> Vec<Choice> {
         .cloned()
         .collect()
 }
-fn comma(s: &str) -> Vec<String> {
-    s.split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
 fn kind_name(kind: Kind) -> &'static str {
     match kind {
         Kind::Github => "github",
@@ -2299,6 +2266,29 @@ fn kind_name(kind: Kind) -> &'static str {
         Kind::Forgejo => "forgejo",
         Kind::Jira => "jira",
     }
+}
+fn default_forge_name(kind: Kind, existing: &[ForgeConfig], current_id: Option<&str>) -> String {
+    let ordinal = existing
+        .iter()
+        .filter(|f| f.kind == kind)
+        .take_while(|f| Some(f.id.as_str()) != current_id)
+        .count()
+        + 1;
+    let stem = kind_name(kind);
+    (ordinal..)
+        .map(|n| {
+            if n == 1 {
+                stem.to_owned()
+            } else {
+                format!("{stem}-{n}")
+            }
+        })
+        .find(|name| {
+            existing
+                .iter()
+                .all(|f| Some(f.id.as_str()) == current_id || f.name() != name)
+        })
+        .expect("finite source list")
 }
 pub fn next_source_id(kind: Kind, existing: &[ForgeConfig]) -> String {
     let stem = kind_name(kind);
@@ -2383,7 +2373,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         let state = installer.inspect(Paths::for_home(home.into())?,&cancel).await?;
         wizard.load(&state)?;
         p.say("Rootless Podman, Quadlet and user manager available.");
-        if state.existing_config.is_some() { p.say("Existing settings loaded. Enter keeps defaults and saved tokens; skipped advanced settings are preserved."); }
+        if state.existing_config.is_some() { p.say("Existing settings loaded. Enter keeps defaults and saved tokens; YAML-only settings are preserved."); }
         for warning in &state.warnings { p.say(&format!("Warning: {warning}")); }
         let d = LiveDiscovery::new(wizard.config.upstream.clone());
         wizard.configure(&mut p,&d,&cancel).await?;

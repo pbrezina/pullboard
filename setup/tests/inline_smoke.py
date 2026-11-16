@@ -20,7 +20,7 @@ import time
 
 
 def smoke(binary, no_color=False, termination=None, at_password=False, manual=False,
-          discovery_menu=False, forge_cancel=False):
+          discovery_menu=False, forge_cancel=False, forge_names=False):
     temp_root = "/tmp/opencode" if Path("/tmp/opencode").is_dir() else None
     with tempfile.TemporaryDirectory(prefix="pullboard-inline-pty-", dir=temp_root) as home:
         master, slave = pty.openpty()
@@ -128,22 +128,30 @@ def smoke(binary, no_color=False, termination=None, at_password=False, manual=Fa
                 answer("Sprint pattern actions:")
                 if forge_cancel:
                     answer("Add a forge account?", b"y\r")
-                    # Esc is local at provider, URL, masked token and confirmation.
+                    # Esc is local at provider, name, URL and masked token.
                     for stage in range(4):
                         wait("Forge provider:")
                         if stage > 0:
                             os.write(master, b"\r")
-                            wait("Forge URL")
+                            wait("Forge name:")
                         if stage > 1:
+                            os.write(master, b"\r")
+                            wait("Forge URL")
+                        if stage > 2:
                             os.write(master, b"\r")
                             wait("Token:")
                             os.write(master, sentinel)
                             drain()
-                        if stage > 2:
-                            os.write(master, b"\r")
-                            wait("Configure advanced repository")
                         os.write(master, b"\x1b")
                         answer("Add another forge?", b"y\r" if stage < 3 else b"n\r")
+                elif forge_names:
+                    answer("Add a forge account?", b"y\r")
+                    for stage, name in enumerate([b"\r", b"\r", b"Work GitHub\r"]):
+                        answer("Forge provider:")
+                        answer("Forge name:", name)
+                        answer("Forge URL")
+                        answer("Token:", sentinel + b"\r")
+                        answer("Add another forge?", b"y\r" if stage < 2 else b"n\r")
                 else:
                     answer("Add a forge account?")
                 wait("AI provider:")
@@ -157,6 +165,10 @@ def smoke(binary, no_color=False, termination=None, at_password=False, manual=Fa
                 assert b"pullboard:nightly" in output
                 assert b"[hidden]" in output
                 assert b"non-exhaustive" in output
+                if forge_names:
+                    assert b"Forge: github (github-1)" in output
+                    assert b"Forge: github-2 (github-2)" in output
+                    assert b"Forge: Work GitHub (github-3)" in output
                 if manual:
                     assert b"manual entry remains available" in output
                     assert b"board 88" in output
@@ -169,6 +181,10 @@ def smoke(binary, no_color=False, termination=None, at_password=False, manual=Fa
             assert child.returncode == 0, bytes(output)[-2000:]
             assert sentinel not in output
             assert b"Configure advanced issue-type/workflow" not in output
+            assert b"Configure advanced repository" not in output
+            assert b"Include repository globs" not in output
+            assert b"Exclude repository globs" not in output
+            assert b"Default Jira project:" not in output
             assert b"Draft status suggestion:" not in output
             assert b"Ready status suggestion:" not in output
             assert b"\x1b[?1049" not in output, "alternate screen used"
@@ -241,5 +257,7 @@ if __name__ == "__main__":
     smoke(executable, no_color=True, discovery_menu=True)
     smoke(executable, forge_cancel=True)
     smoke(executable, no_color=True, forge_cancel=True)
+    smoke(executable, forge_names=True)
+    smoke(executable, no_color=True, forge_names=True)
     startup_cancellation(executable)
-    print("13 PTY flows + 1000 queued-startup cancellation cases passed: direct recent/manual/team pickers, blue help/cyan selections, Ctrl-O More options, local forge Esc, arrows, multiselect/search, Enter defaults, hidden secrets, no color/alternate screen, Ctrl-C/TERM/HUP exact termios/cursor/paste restoration; no network/install/files")
+    print("15 PTY flows + 1000 queued-startup cancellation cases passed: direct recent/manual/team pickers, blue help/cyan selections, Ctrl-O More options, local forge Esc, default/custom forge names, no advanced repository prompts, arrows, multiselect/search, Enter defaults, hidden secrets, no color/alternate screen, Ctrl-C/TERM/HUP exact termios/cursor/paste restoration; no network/install/files")

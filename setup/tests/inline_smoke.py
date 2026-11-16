@@ -126,7 +126,6 @@ def smoke(binary, no_color=False, termination=None, at_password=False, manual=Fa
                 os.write(master, b"\r")
                 answer("Regular expression to identify your sprints:")
                 answer("Sprint pattern actions:")
-                answer("Configure advanced issue-type/workflow suggestions?")
                 if forge_cancel:
                     answer("Add a forge account?", b"y\r")
                     # Esc is local at provider, URL, masked token and confirmation.
@@ -169,6 +168,9 @@ def smoke(binary, no_color=False, termination=None, at_password=False, manual=Fa
             drain()
             assert child.returncode == 0, bytes(output)[-2000:]
             assert sentinel not in output
+            assert b"Configure advanced issue-type/workflow" not in output
+            assert b"Draft status suggestion:" not in output
+            assert b"Ready status suggestion:" not in output
             assert b"\x1b[?1049" not in output, "alternate screen used"
             assert b"\x1b[?2004l" in output, "bracketed paste not disabled"
             assert b"cancelled" in output

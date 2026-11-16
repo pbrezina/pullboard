@@ -446,7 +446,6 @@ fn jira_new() -> Vec<Step> {
     steps.extend([
         Text("Regular expression to identify your sprints", "<default>"),
         Enter("Sprint pattern actions"),
-        Confirm("Configure advanced issue", false),
     ]);
     steps
 }
@@ -492,10 +491,6 @@ async fn new_linear_flow_opens_singleton_pickers_directly_and_has_live_ai_disabl
         p.defaults
             .contains(&("Start in Test mode?".into(), "false".into()))
     );
-    assert!(p.defaults.contains(&(
-        "Configure advanced issue-type/workflow suggestions?".into(),
-        "false".into()
-    )));
     assert!(p.transcript.iter().all(|s| !s.contains("new-jira-secret")));
     for question in [
         "Jira projects:",
@@ -604,7 +599,6 @@ async fn team_ctrl_o_offers_all_verified_metadata_choices_without_a_new_scan_or_
         Select("Team:", 1),
         Enter("Regular expression to identify your sprints"),
         Enter("Sprint pattern actions"),
-        Enter("Configure advanced issue"),
     ]);
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);
@@ -673,7 +667,6 @@ async fn failed_or_empty_board_teams_open_explicit_fallback_and_retry_without_pa
                 Enter("Team:"),
                 Enter("Regular expression to identify your sprints"),
                 Enter("Sprint pattern actions"),
-                Enter("Configure advanced issue"),
             ]);
             steps.extend(disabled_tail());
             let mut p = Script::new(steps);
@@ -762,7 +755,6 @@ async fn failed_jira_only_retries_changes_or_removes_never_saves_unverified() {
             steps.extend([
                 Text("Regular expression to identify your sprints", "<default>"),
                 Enter("Sprint pattern actions"),
-                Confirm("Configure advanced issue", false),
             ]);
         }
         steps.extend(disabled_tail());
@@ -799,7 +791,6 @@ async fn edited_project_removal_is_deliberate_and_preserves_nonorphaned_advanced
         Enter("Team:"),
         Text("Regular expression to identify your sprints", "<default>"),
         Enter("Sprint pattern actions"),
-        Confirm("Configure advanced issue", false),
         Confirm("Configure existing forge", true),
         Select("Forge provider", 0),
         Text("Forge URL", "<default>"),
@@ -1054,7 +1045,6 @@ async fn changing_my_board_on_supplied_review_rebuilds_metadata_in_the_new_order
         Enter("Team:"),
         Enter("Regular expression"),
         Enter("Sprint pattern actions"),
-        Confirm("Configure advanced issue", false),
         Confirm("Edit Jira settings", false),
     ]);
     steps.extend(disabled_tail());
@@ -1090,7 +1080,6 @@ async fn unverified_saved_secondary_board_requires_explicit_removal_or_blocks_co
                 Enter("Team:"),
                 Enter("Regular expression"),
                 Enter("Sprint pattern actions"),
-                Confirm("Configure advanced issue", false),
             ]);
             steps.extend(disabled_tail());
             let mut p = Script::new(steps);
@@ -1169,7 +1158,6 @@ async fn ordered_editors_add_remove_and_reselect_primary_without_losing_saved_pa
         Select("My sprint pattern", 1),
         Enter("Sprint pattern actions"),
         Confirm("Continue with no unique", true),
-        Confirm("Configure advanced issue", false),
     ];
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);
@@ -1238,7 +1226,6 @@ async fn ordered_editors_add_remove_and_reselect_primary_without_losing_saved_pa
         Enter("Regular expression"),
         Enter("Sprint pattern actions"),
         Confirm("Continue with no unique", true),
-        Confirm("Configure advanced issue", false),
     ];
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);
@@ -1543,7 +1530,6 @@ async fn declining_supplied_existing_update_uses_saved_defaults_instead() {
         Enter("Team:"),
         Enter("Regular expression"),
         Enter("Sprint pattern actions"),
-        Confirm("Configure advanced issue", false),
     ];
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);
@@ -1649,7 +1635,6 @@ async fn supplied_review_can_return_to_editable_wizard_without_reapplying_argume
         Enter("Team:"),
         Text("Regular expression", "current$"),
         Enter("Sprint pattern actions"),
-        Confirm("Configure advanced issue", false),
         Confirm("Edit Jira settings", false),
     ]);
     steps.extend(disabled_tail());
@@ -1800,33 +1785,29 @@ async fn ai_endpoint_change_requires_saved_token_consent_even_without_a_test() {
 }
 
 #[tokio::test]
-async fn advanced_scoped_suggestions_are_opt_in_and_never_assign_self() {
+async fn jira_setup_keeps_builtin_policies_without_issue_type_or_workflow_prompts() {
+    use pullboard_core::model::Purpose;
+
     let mut a = app();
     let mut steps = jira_new();
-    steps.pop();
-    steps.extend([
-        Confirm("Configure advanced issue", true),
-        Confirm("Edit suggestions for", true),
-        Confirm("Edit Implementation", true),
-        Select("Draft status", 0),
-        Select("Ready status", 2),
-        Confirm("Edit Review", false),
-    ]);
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);
     configured(&mut a, &mut p, &MockDiscovery::default()).await;
-    let policy = a.config.jira.as_ref().unwrap().project_overrides["ONE"]
-        .defaults
-        .implementation
-        .as_ref()
-        .unwrap();
-    assert!(policy.assignee.is_none());
-    assert_eq!(policy.issue_type, "Task");
-    assert!(policy.workflow.as_ref().unwrap().draft.is_none());
-    assert_eq!(
-        policy.workflow.as_ref().unwrap().ready.as_deref(),
-        Some("Ready")
-    );
+    let jira = a.config.jira.as_ref().unwrap();
+    assert!(jira.defaults.implementation.is_none());
+    assert!(jira.defaults.review.is_none());
+    assert!(jira.project_overrides.is_empty());
+    for purpose in [Purpose::Implementation, Purpose::Review] {
+        let policy = jira.policy("ONE", purpose);
+        assert_eq!(policy.issue_type, "Task");
+        assert!(policy.assignee.is_none());
+        assert!(policy.workflow.is_none());
+    }
+    for (question, _) in &p.defaults {
+        assert!(!question.contains("Configure advanced issue"));
+        assert!(!question.contains("suggestions"));
+        assert_ne!(question, "Issue type:");
+    }
 }
 
 #[tokio::test]
@@ -1845,7 +1826,6 @@ async fn regex_search_defaults_do_not_filter_inventory_and_ambiguity_requires_ac
             "Team A current",
         ),
         Enter("Sprint pattern actions"),
-        Confirm("Configure advanced issue", false),
     ]);
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);
@@ -2115,7 +2095,6 @@ async fn group_menu_supports_confirmed_full_scan_manual_lookup_retry_and_auto_ad
         Enter("Team:"),
         Enter("Regular expression to identify your sprints"),
         Enter("Sprint pattern actions"),
-        Confirm("Configure advanced issue", false),
     ]);
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);
@@ -2185,7 +2164,6 @@ async fn saved_groups_outside_memberships_are_verified_preserved_and_fail_closed
             Enter("Team:"),
             Enter("Regular expression to identify your sprints"),
             Enter("Sprint pattern actions"),
-            Enter("Configure advanced issue"),
         ]);
         steps.extend(disabled_tail());
         let mut p = Script::new(steps);
@@ -2232,7 +2210,6 @@ async fn failed_or_empty_own_groups_allow_manual_setup_without_automatic_full_sc
             Enter("Team:"),
             Enter("Regular expression to identify your sprints"),
             Enter("Sprint pattern actions"),
-            Enter("Configure advanced issue"),
         ]);
         steps.extend(disabled_tail());
         let mut p = Script::new(steps);
@@ -2243,8 +2220,11 @@ async fn failed_or_empty_own_groups_allow_manual_setup_without_automatic_full_sc
 }
 
 #[tokio::test]
-async fn skipping_optional_advanced_preserves_saved_policies_and_filters_exactly() {
-    use pullboard_core::{config::PurposePolicy, model::Workflow};
+async fn wizard_edits_preserve_saved_jira_policies_and_skipped_repository_filters_exactly() {
+    use pullboard_core::{
+        config::{PurposeDefaults, PurposePolicy},
+        model::Workflow,
+    };
     let mut a = app();
     a.config = fixture();
     a.config.jira.as_mut().unwrap().projects = vec!["ONE".into()];
@@ -2257,6 +2237,35 @@ async fn skipping_optional_advanced_preserves_saved_policies_and_filters_exactly
             ready: Some("Ready".into()),
         }),
     });
+    a.config.jira.as_mut().unwrap().defaults.review = Some(PurposePolicy {
+        issue_type: "Custom review".into(),
+        assignee: None,
+        workflow: Some(Workflow {
+            draft: None,
+            ready: Some("Review ready".into()),
+        }),
+    });
+    a.config.jira.as_mut().unwrap().project_overrides.insert(
+        "ONE".into(),
+        ProjectOverride {
+            defaults: PurposeDefaults {
+                implementation: Some(PurposePolicy {
+                    issue_type: "Project task".into(),
+                    assignee: None,
+                    workflow: Some(Workflow {
+                        draft: Some("Project draft".into()),
+                        ready: None,
+                    }),
+                }),
+                review: Some(PurposePolicy {
+                    issue_type: "Project review".into(),
+                    assignee: None,
+                    workflow: None,
+                }),
+            },
+        },
+    );
+    a.config = Config::from_yaml(&a.config.to_yaml().unwrap()).unwrap();
     let before = serde_json::to_value(&a.config).unwrap();
     let mut steps = vec![
         Confirm("Configure Jira", true),
@@ -2270,7 +2279,6 @@ async fn skipping_optional_advanced_preserves_saved_policies_and_filters_exactly
         Enter("Team:"),
         Text("Regular expression to identify your sprints", "<default>"),
         Enter("Sprint pattern actions"),
-        Confirm("Configure advanced issue", false),
         Confirm("Configure existing forge", true),
         Select("Forge provider", 0),
         Text("Forge URL", "<default>"),
@@ -2280,7 +2288,8 @@ async fn skipping_optional_advanced_preserves_saved_policies_and_filters_exactly
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);
     configured(&mut a, &mut p, &MockDiscovery::default()).await;
-    let after = serde_json::to_value(&a.config).unwrap();
+    let saved = Config::from_yaml(&a.config.to_yaml().unwrap()).unwrap();
+    let after = serde_json::to_value(saved).unwrap();
     assert_eq!(before["jira"], after["jira"]);
     assert_eq!(before["forges"], after["forges"]);
 }
@@ -2305,7 +2314,6 @@ async fn rerun_enter_keeps_saved_primary_when_multiselect_returns_inventory_orde
         Enter("Team:"),
         Enter("Regular expression to identify your sprints"),
         Enter("Sprint pattern actions"),
-        Enter("Configure advanced issue"),
         Enter("Add a forge account"),
         Enter("AI provider"),
         Enter("Local host port"),
@@ -2381,7 +2389,6 @@ async fn empty_or_failed_recents_allow_manual_disambiguation_and_reuse_verified_
             Enter("Team:"),
             Text("Regular expression to identify your sprints", "<default>"),
             Enter("Sprint pattern actions"),
-            Confirm("Configure advanced issue", false),
         ]);
         steps.extend(disabled_tail());
         let mut p = Script::new(steps);
@@ -2465,7 +2472,6 @@ async fn broad_lookups_require_separate_warnings_and_explicit_confirmation_and_s
         Enter("Team:"),
         Text("Regular expression to identify your sprints", "<default>"),
         Enter("Sprint pattern actions"),
-        Confirm("Configure advanced issue", false),
     ]);
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);
@@ -2526,7 +2532,6 @@ async fn failed_broad_and_manual_reads_keep_the_manager_usable_and_explain_the_c
         Enter("Team:"),
         Text("Regular expression to identify your sprints", "<default>"),
         Enter("Sprint pattern actions"),
-        Confirm("Configure advanced issue", false),
     ]);
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);
@@ -2576,7 +2581,6 @@ async fn saved_selections_absent_from_recents_are_verified_once_and_preserved_in
         Enter("Team:"),
         Enter("Regular expression to identify your sprints"),
         Enter("Sprint pattern actions"),
-        Enter("Configure advanced issue"),
     ];
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);
@@ -2637,7 +2641,6 @@ async fn unverified_saved_projects_cannot_be_saved_or_silently_removed_and_remov
         Enter("Team:"),
         Enter("Regular expression to identify your sprints"),
         Enter("Sprint pattern actions"),
-        Enter("Configure advanced issue"),
         Confirm("Configure existing forge", true),
         Select("Forge provider", 0),
         Enter("Forge URL"),
@@ -2698,7 +2701,6 @@ async fn manual_failures_redact_actual_literal_encoded_and_basic_secrets_without
         Enter("Team:"),
         Enter("Regular expression to identify your sprints"),
         Enter("Sprint pattern actions"),
-        Enter("Configure advanced issue"),
     ]);
     steps.extend(disabled_tail());
     let mut p = Script::new(steps);

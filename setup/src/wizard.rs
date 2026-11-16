@@ -8,10 +8,10 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use pullboard_core::{
     config::{
-        AiConfig, AiProvider, Config, ForgeConfig, JiraConfig, PurposeDefaults, PurposePolicy,
-        Secret, SprintPattern, Upstream,
+        AiConfig, AiProvider, Config, ForgeConfig, JiraConfig, PurposeDefaults, Secret,
+        SprintPattern, Upstream,
     },
-    model::{Kind, Purpose, Workflow},
+    model::Kind,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -1590,7 +1590,6 @@ impl Wizard {
             .map(|j| (j.base_url.clone(), j.token.clone()));
         let mut url_default = self.cli_url.clone().unwrap_or_else(|| j.base_url.clone());
         loop {
-            let complete_team_command = args.complete();
             j.base_url = if let Some(url) = &args.url {
                 p.say(&format!("Jira Cloud tenant URL: {url} (supplied)"));
                 url.clone()
@@ -1795,12 +1794,6 @@ impl Wizard {
                 }
             }
             select_sprint_patterns(p, &mut j, &metadata, &mut args).await?;
-            if !complete_team_command
-                && p.confirm("Configure advanced issue-type/workflow suggestions?", false)
-                    .await?
-            {
-                advanced_jira(p, &mut j, &metadata).await?;
-            }
             if review_supplied {
                 p.heading("Review Jira settings");
                 for line in jira_args::summary(&j) {
@@ -2360,88 +2353,6 @@ pub fn project_cleanup(config: &Config, selected: &[String]) -> Vec<String> {
         }
     }
     lines
-}
-
-async fn advanced_jira(p: &mut impl Prompts, j: &mut JiraConfig, m: &Metadata) -> Result<()> {
-    p.say("Suggestions never preselect assignee, sprint or status. Tickets begin Unassigned, No sprint and Jira default/no transition.");
-    for project in j.projects.clone() {
-        if !p
-            .confirm(&format!("Edit suggestions for project {project}?"), false)
-            .await?
-        {
-            continue;
-        }
-        for (purpose, label) in [
-            (Purpose::Implementation, "Implementation"),
-            (Purpose::Review, "Review"),
-        ] {
-            if !p
-                .confirm(&format!("Edit {label} suggestions?"), false)
-                .await?
-            {
-                continue;
-            }
-            let available: Vec<_> = m.types.iter().filter(|t| t.project == project).collect();
-            let types: Vec<_> = available
-                .iter()
-                .map(|t| Choice::new(&t.name, &t.name))
-                .collect();
-            let current = j.policy(&project, purpose);
-            let name = one(p, "Issue type:", &types, &current.issue_type).await?;
-            let t = available
-                .iter()
-                .find(|t| t.name == name)
-                .context("missing metadata")?;
-            let mut statuses = vec![Choice::new("", "Jira default / no suggestion")];
-            statuses.extend(t.statuses.iter().map(|s| Choice::new(s, s)));
-            let draft = p
-                .select(
-                    "Draft status suggestion:",
-                    &statuses,
-                    index(
-                        &statuses,
-                        current
-                            .workflow
-                            .as_ref()
-                            .and_then(|w| w.draft.as_deref())
-                            .unwrap_or(""),
-                    ),
-                )
-                .await?;
-            let ready = p
-                .select(
-                    "Ready status suggestion:",
-                    &statuses,
-                    index(
-                        &statuses,
-                        current
-                            .workflow
-                            .as_ref()
-                            .and_then(|w| w.ready.as_deref())
-                            .unwrap_or(""),
-                    ),
-                )
-                .await?;
-            let policy = PurposePolicy {
-                issue_type: name,
-                assignee: None,
-                workflow: Some(Workflow {
-                    draft: (draft > 0).then(|| statuses[draft].id.clone()),
-                    ready: (ready > 0).then(|| statuses[ready].id.clone()),
-                }),
-            };
-            let defaults = &mut j
-                .project_overrides
-                .entry(project.clone())
-                .or_default()
-                .defaults;
-            match purpose {
-                Purpose::Implementation => defaults.implementation = Some(policy),
-                Purpose::Review => defaults.review = Some(policy),
-            }
-        }
-    }
-    Ok(())
 }
 
 pub async fn run(cli: Cli) -> Result<()> {

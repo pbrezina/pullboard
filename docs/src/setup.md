@@ -121,8 +121,9 @@ trim surrounding whitespace, reject empty entries and deduplicate in first-occur
 order. Names containing a literal comma cannot be represented by those two flags;
 select them interactively. Only board-ID and sprint-pattern flags are repeatable;
 their values must be unique and remain in supplied order. Repeating other flags or
-supplying malformed values is rejected. Email, token, issue-type policies and per-project workflow overrides have
-no command-line parameters. There are no credential environment inputs.
+supplying malformed values is rejected. Email, token, issue-type policies and
+per-project workflow overrides have no command-line parameters. There are no
+credential environment inputs.
 
 Explicit projects, boards, groups and team do not require recent-item, own-group,
 board-issue team discovery or broad inventory scans. They still require identity,
@@ -292,6 +293,11 @@ start No sprint, Unassigned and no transition; workflow mappings are suggestions
 Setup writes `board_ids` and `sprint_name_patterns`; old singular YAML keys are
 [rejected rather than migrated automatically](configuration.md#migrate-singular-sprint-settings).
 
+The wizard does not ask for issue types or workflow suggestions. New configurations
+use Task for implementation and review, with no workflow suggestions. To customize
+these, edit the [YAML purpose policies](configuration.md#purpose-policies-and-cached-choices).
+Setup preserves saved policies when editing an existing configuration.
+
 ### Forges
 
 Walk through saved instances or add another: provider, URL, token and verification.
@@ -347,10 +353,11 @@ choices, with plain output under `--no-color` or `NO_COLOR=1`. Esc at a forge pr
 discards only that forge draft. Ctrl-C always cancels setup. Secrets stay masked
 and are never included in completed-answer summaries.
 
-Discovered values are suggested when available. Optional advanced settings are
-hidden behind **Configure advanced settings?**, default No; skipping them preserves
-saved advanced settings. Failed connections offer only **Retry / Change answers /
-Skip this integration**. There is no save-unverified path. Unfinished settings stay
+Discovered values are suggested when available. Optional repository filters and a
+forge's default Jira project are behind **Configure advanced repository filters/default
+Jira project?**, default No; skipping them preserves saved settings. Failed connections
+offer only **Retry / Change answers / Skip this integration**. There is no
+save-unverified path. Unfinished settings stay
 in memory, and nothing is installed until you choose a final installation action.
 
 Runtime selects host port and Stable/Nightly image. YAML uses container bind

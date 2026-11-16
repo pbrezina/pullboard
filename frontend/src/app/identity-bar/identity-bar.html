@@ -14,7 +14,9 @@
                   : 'G'
           }}</span>
           <span class="min-w-0 break-words"
-            ><strong translate="no">{{ identity.source_id }}</strong
+            ><strong translate="no">{{
+              sourceNames().get(identity.source_id) ?? identity.source_id
+            }}</strong
             ><pb-link [url]="identity.profile_url" [label]="identity.display_name">{{
               identity.username || identity.display_name
             }}</pb-link></span

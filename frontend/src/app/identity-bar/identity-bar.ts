@@ -1,5 +1,5 @@
 import { Component, computed, input } from '@angular/core';
-import type { Context } from '../core/api-types';
+import type { Context, SourceHealth } from '../core/api-types';
 import { sprintViewUrl } from '../core/board-logic';
 import { ExternalLink } from '../ui/external-link/external-link';
 
@@ -11,6 +11,10 @@ import { ExternalLink } from '../ui/external-link/external-link';
 })
 export class IdentityBar {
   readonly context = input.required<Context>();
+  readonly sources = input<SourceHealth[]>([]);
+  readonly sourceNames = computed(
+    () => new Map(this.sources().map((source) => [source.source_id, source.name])),
+  );
   readonly sprints = computed(() =>
     this.context().current_sprints.filter((s) => s.state === 'active' && s.default_eligible),
   );

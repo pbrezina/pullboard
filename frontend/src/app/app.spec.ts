@@ -25,6 +25,9 @@ describe('PullBoard app', () => {
     expect(text).toContain('Upstream Pull Requests');
     expect(text).toContain('Current active sprints');
     expect(text).toContain('Source health');
+    expect(f.nativeElement.querySelectorAll('.identity strong')[1].textContent.trim()).toBe(
+      'Work GitHub',
+    );
     const mode = f.nativeElement.querySelector('.app-header .runtime-mode');
     expect(mode.textContent).toContain('Test mode');
     expect(mode.textContent).toContain('Jira actions simulated');

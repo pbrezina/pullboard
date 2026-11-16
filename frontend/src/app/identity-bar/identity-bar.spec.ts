@@ -1,7 +1,30 @@
 import { TestBed } from '@angular/core/testing';
 import { IdentityBar } from './identity-bar';
-import { context, orderedSprintScenario, sprint } from '../testing/fixtures';
+import { board, context, orderedSprintScenario, sprint } from '../testing/fixtures';
 describe('Who am I', () => {
+  it('joins configured source names by ID while keeping same-forge accounts distinct', async () => {
+    const f = TestBed.createComponent(IdentityBar);
+    f.componentRef.setInput('context', context());
+    const source = board().sources[0];
+    f.componentRef.setInput('sources', [
+      { ...source, source_id: 'personal', name: 'Personal GitHub' },
+      source,
+      { ...source, source_id: 'jira', kind: 'jira', name: 'Work Jira' },
+      { ...source, source_id: 'unverified', name: 'Unverified forge' },
+    ]);
+    await f.whenStable();
+    const labels = () =>
+      Array.from(
+        f.nativeElement.querySelectorAll('.identity strong') as NodeListOf<HTMLElement>,
+      ).map((label) => label.textContent?.trim());
+    expect(labels()).toEqual(['Work Jira', 'Work GitHub', 'Personal GitHub']);
+    expect(f.nativeElement.querySelectorAll('.identity')).toHaveLength(3);
+    expect(f.nativeElement.querySelector('.identity a').textContent).toBe('alex');
+
+    f.componentRef.setInput('sources', [{ ...source, name: 'Renamed GitHub' }]);
+    await f.whenStable();
+    expect(labels()).toEqual(['jira', 'Renamed GitHub', 'personal']);
+  });
   it('shows distinct identities, current project and linked full sprint names with ambiguity', async () => {
     const f = TestBed.createComponent(IdentityBar);
     f.componentRef.setInput(

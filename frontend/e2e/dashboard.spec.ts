@@ -209,6 +209,7 @@ test('dense three-column workbench, matching card widths and natural heights, li
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Your PR feedback' })).toBeVisible();
   await expect(page.getByText('Showing 4 of 4')).toBeVisible();
+  await expect(page.locator('.identity strong')).toHaveText(['Jira', 'Work GitHub', 'personal']);
   const boxes = await page.locator('.work-card').evaluateAll((cards) =>
     cards.map((c) => ({
       width: Math.round(c.getBoundingClientRect().width),

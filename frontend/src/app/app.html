@@ -123,7 +123,7 @@
 </header>
 <div class="workspace-shell">
   @if (store.context(); as context) {
-    <app-identity-bar [context]="context" />
+    <app-identity-bar [context]="context" [sources]="sources()" />
   }
   @if (store.error()) {
     <div class="error-banner workspace-error" role="alert">

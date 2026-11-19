@@ -1055,3 +1055,101 @@ async fn tightening_configured_repository_and_project_filters_also_prunes_warm_c
     assert!(board.issues.is_empty());
     assert!(board.pull_requests.is_empty());
 }
+#[tokio::test]
+async fn expired_attention_is_pruned_only_from_successful_source_snapshots() {
+    let mut c = config();
+    c.attention_retention_days = 10;
+    c.jira = Some(jira("https://jira.example"));
+    c.forges.push(forge("github", "https://api.github.com"));
+    let cache = Cache::open(&c.server.database, &c).await.unwrap();
+    verify_sources(&cache, &c).await;
+    let now = chrono::Utc::now();
+    let thread = |id: &str, latest_days: i64, reason| pullboard::model::AttentionThread {
+        id: id.into(),
+        url: "https://forge.example/thread".into(),
+        reason,
+        waiting_since: now - chrono::Duration::days(30 + latest_days),
+        latest_unanswered_at: Some(now - chrono::Duration::days(latest_days)),
+        excerpt: id.into(),
+    };
+    let old_thread = thread("old", 20, pullboard::model::Reason::PrMention);
+    let fresh_thread = thread("new", 1, pullboard::model::Reason::AuthorFeedback);
+    let old = pullboard::model::Attention {
+        reasons: vec![old_thread.reason],
+        waiting_since: old_thread.waiting_since,
+        threads: vec![old_thread.clone()],
+        coverage: "partial".into(),
+    };
+    let mut assigned = issue();
+    assigned.attention = Some(old.clone());
+    let mut mention_only = assigned.clone();
+    mention_only.id = "unassigned".into();
+    mention_only.key = "DEV-2".into();
+    mention_only.is_assigned_to_me = false;
+    let mut revived = pr();
+    revived.attention = Some(pullboard::model::Attention {
+        reasons: vec![fresh_thread.reason, old_thread.reason],
+        waiting_since: old_thread.waiting_since,
+        threads: vec![fresh_thread.clone(), old_thread],
+        coverage: "partial".into(),
+    });
+    let mut linked = pr();
+    linked.id = "linked".into();
+    linked.is_mine = false;
+    linked.attention = Some(old.clone());
+    let mut expired = linked.clone();
+    expired.id = "expired".into();
+    expired.title = "Unlinked work".into();
+    expired.url = "https://forge.example/unlinked/pull/1".into();
+    expired.linked_issue_keys.clear();
+    let snapshot = cache
+        .publish(vec![
+            SourceUpdate {
+                source_id: "jira".into(),
+                result: Ok(SourceData {
+                    issues: vec![assigned, mention_only],
+                    ..Default::default()
+                }),
+            },
+            SourceUpdate {
+                source_id: "test-forge".into(),
+                result: Ok(SourceData {
+                    pull_requests: vec![revived, linked, expired],
+                    ..Default::default()
+                }),
+            },
+        ])
+        .await
+        .unwrap();
+    assert_eq!(snapshot.board.issues.len(), 1);
+    assert!(snapshot.board.issues[0].attention.is_none());
+    assert_eq!(snapshot.board.pull_requests.len(), 2);
+    let linked = snapshot
+        .board
+        .pull_requests
+        .iter()
+        .find(|pr| pr.id == "linked")
+        .unwrap();
+    assert!(linked.attention.is_none());
+    let revived = snapshot
+        .board
+        .pull_requests
+        .iter()
+        .find_map(|pr| pr.attention.as_ref())
+        .unwrap();
+    assert_eq!(revived.threads.len(), 1);
+    assert_eq!(revived.reasons, vec![fresh_thread.reason]);
+    assert_eq!(revived.waiting_since, fresh_thread.waiting_since);
+
+    let failed = cache
+        .publish(vec![SourceUpdate {
+            source_id: "test-forge".into(),
+            result: Err(pullboard::error::Error::upstream()),
+        }])
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(failed.board.pull_requests).unwrap(),
+        serde_json::to_value(snapshot.board.pull_requests).unwrap()
+    );
+}

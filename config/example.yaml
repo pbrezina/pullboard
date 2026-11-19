@@ -18,6 +18,7 @@ server:
 read_only_test_mode: true
 refresh_interval_seconds: 3600
 attention_default_days: 14          # Optional; initial/reset Needs Attention display window.
+attention_retention_days: 180       # Optional; server-side attention retention after successful refresh.
 upstream:
   timeout_seconds: 30               # total per-request timeout; allowed 1..120
   max_pages: 100                    # 1..1000; bounds fail closed, keep verified same-scope data

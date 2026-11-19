@@ -410,7 +410,7 @@ impl Jira {
     ) -> Result<SourceData> {
         // Take the cutoff before fetching any remotelinks, not at publication.
         let jira_read_revision = self.cache.get().map(|cache| cache.committed().revision);
-        let mut data=SourceData{identity:Some(identity.clone()),jira_project:preparation.project.clone(),coverage_notes:vec!["Jira discovery uses separate fully paginated enhanced JQL searches for assigned issues in configured projects and description/comment mention candidates across all accessible projects, regardless of assignee. Only status Closed is excluded, not resolution or Done category; there is no date cutoff or unfiltered fallback. Search indexing, permissions and deleted history may omit mentions. Explicit ADF mentions and upstream replies determine attention. Mention timers use current description/comment revision timestamps when edit history is unavailable; own replies clear at comment creation timestamps.".into()],..Default::default()};
+        let mut data=SourceData{identity:Some(identity.clone()),jira_project:preparation.project.clone(),coverage_notes:vec!["Jira discovery uses separate fully paginated enhanced JQL searches for assigned issues in configured projects and recently updated description/comment mention candidates across all accessible projects, regardless of assignee. Assigned work has no date cutoff. There is no unfiltered fallback. Search indexing, permissions and deleted history may omit mentions. Explicit ADF mentions and upstream replies determine attention. Mention timers use current description/comment revision timestamps when edit history is unavailable; own replies clear at comment creation timestamps.".into()],..Default::default()};
         let (sprints, (issues, links)) = tokio::try_join!(
             sprints,
             self.read_issues(
@@ -565,7 +565,19 @@ impl Jira {
         let assigned_jql = format!(
             "project in ({keys}) AND assignee = currentUser() AND status != \"Closed\" ORDER BY key ASC"
         );
-        let mention_jql = "status != \"Closed\" AND (description ~ currentUser() OR comment ~ currentUser()) ORDER BY key ASC";
+        let retention_days = self
+            .cache
+            .get()
+            .map_or(crate::config::DEFAULT_ATTENTION_RETENTION_DAYS, |cache| {
+                cache.attention_retention_days()
+            });
+        // JQL's issue update index is a coarse candidate filter, not a mention
+        // timestamp. Look back an extra day for query timing/precision and use
+        // upstream event timestamps for the exact retention decision.
+        let mention_jql = format!(
+            "status != \"Closed\" AND (description ~ currentUser() OR comment ~ currentUser()) AND updated >= \"-{}d\" ORDER BY key ASC",
+            retention_days + 1
+        );
         let fields = format!(
             "summary,description,project,issuetype,status,reporter,assignee,created,updated,{custom}"
         );
@@ -576,7 +588,7 @@ impl Jira {
         let mut mentioned = BTreeMap::new();
         tokio::try_join!(
             self.search(&assigned_jql, &fields, &mut assigned),
-            self.search(mention_jql, &fields, &mut mentioned)
+            self.search(&mention_jql, &fields, &mut mentioned)
         )?;
         let mut candidates = assigned;
         for (id, issue) in mentioned {

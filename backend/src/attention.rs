@@ -83,6 +83,13 @@ pub fn compute(threads: Vec<Thread>, partial: bool) -> Option<Attention> {
             });
         }
     }
+    aggregate(
+        unanswered,
+        if partial { "partial" } else { "complete" }.into(),
+    )
+}
+
+fn aggregate(mut unanswered: Vec<AttentionThread>, coverage: String) -> Option<Attention> {
     unanswered.sort_by(|a, b| {
         a.waiting_since
             .cmp(&b.waiting_since)
@@ -99,8 +106,30 @@ pub fn compute(threads: Vec<Thread>, partial: bool) -> Option<Attention> {
         waiting_since,
         reasons,
         threads: unanswered,
-        coverage: if partial { "partial" } else { "complete" }.into(),
+        coverage,
     })
+}
+
+fn thread_retained(thread: &AttentionThread, cutoff: Time) -> bool {
+    // Legacy cached data does not have a verified latest timestamp. Do not
+    // conclude its last event was old from the oldest event alone.
+    thread.latest_unanswered_at.is_none_or(|at| at >= cutoff)
+}
+
+/// Returns true if this card had attention but all of it expired.
+pub(crate) fn expire(attention: &mut Option<Attention>, cutoff: Time) -> bool {
+    let Some(current) = attention.as_mut() else {
+        return false;
+    };
+    let before = current.threads.len();
+    current.threads.retain(|t| thread_retained(t, cutoff));
+    if current.threads.len() != before {
+        *attention = aggregate(
+            std::mem::take(&mut current.threads),
+            std::mem::take(&mut current.coverage),
+        );
+    }
+    attention.is_none()
 }
 
 pub fn mentions(text: &str, username: &str) -> bool {

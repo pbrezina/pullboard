@@ -21,7 +21,7 @@ fn upstream_issue(key: &str, assigned: bool, description: Option<Value>) -> Valu
 }
 const ASSIGNED_JQL: &str =
     "project in (\"DEV\") AND assignee = currentUser() AND status != \"Closed\" ORDER BY key ASC";
-const MENTION_JQL: &str = "status != \"Closed\" AND (description ~ currentUser() OR comment ~ currentUser()) ORDER BY key ASC";
+const MENTION_JQL: &str = "status != \"Closed\" AND (description ~ currentUser() OR comment ~ currentUser()) AND updated >= \"-181d\" ORDER BY key ASC";
 
 fn is_issue_history(request: &wiremock::Request) -> bool {
     request.url.path().starts_with("/rest/api/3/issue/")

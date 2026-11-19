@@ -20,8 +20,8 @@ timestamp**, not the last fetch or last push.
 - Jira explicit account mentions in descriptions/comments open issue attention;
   your later comment clears earlier mentions. Only status **Closed** excludes an
   issue: a resolution value or Done status category does not clear attention.
-  Mention discovery searches all accessible projects, regardless of assignee and
-  without a date cutoff. Search hits need explicit ADF mention/history verification;
+  Mention discovery searches recently updated issues in all accessible projects,
+  regardless of assignee. Search hits need explicit ADF mention/history verification;
   handled mentions, bots and false positives do not enter Needs Attention.
 
 The attention detail lists the unresolved streams and their source links. Upstream
@@ -39,8 +39,16 @@ selections in your browser; Reset filters restores the configured default.
 
 The window uses the latest qualifying unanswered upstream event, so a new mention
 or follow-up in an unanswered review discussion can reveal an old card. The original
-**Waiting since** timestamp still determines its position. **All time** bypasses
-the window. Filtering never dismisses attention or changes upstream discovery.
+**Waiting since** timestamp still determines its position. **All retained** bypasses
+the display window. Filtering never dismisses attention or changes upstream discovery.
+
+The server retains attention for `attention_retention_days` (optional YAML, defaults
+to 180 days). A successful source refresh drops threads whose newest qualifying
+unanswered event is older than that limit. An old ticket or PR can still appear
+after a fresh mention or reply. A stale snapshot is unchanged until that source
+refreshes successfully. Owned open PRs, qualifying assigned Jira issues and open
+PRs still discoverable and linked to a visible Jira issue are not removed just
+because their attention expires. Nothing is changed upstream.
 
 Upstream Pull Requests shows only Jira issues assigned to you **in configured
 projects** and your own open PRs, sorted by title case-insensitively (stable ID

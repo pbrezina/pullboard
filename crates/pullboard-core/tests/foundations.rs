@@ -239,4 +239,15 @@ fn optional_attention_window_default_and_bounds() {
     );
     assert!(Config::from_yaml("attention_default_days: 0").is_err());
     assert!(Config::from_yaml("attention_default_days: 36501").is_err());
+    assert_eq!(
+        Config::from_yaml("{}").unwrap().attention_retention_days,
+        180
+    );
+    assert_eq!(
+        Config::from_yaml("attention_retention_days: 90")
+            .unwrap()
+            .attention_retention_days,
+        90
+    );
+    assert!(Config::from_yaml("attention_retention_days: 0").is_err());
 }

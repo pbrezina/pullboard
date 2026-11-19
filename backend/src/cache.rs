@@ -84,6 +84,10 @@ pub(crate) struct Committed {
 }
 
 impl Cache {
+    pub(crate) fn attention_retention_days(&self) -> u32 {
+        self.config.attention_retention_days
+    }
+
     pub async fn open(path: &Path, config: &Config) -> anyhow::Result<Self> {
         // Private upstream content belongs to the local user, including the cache.
         #[cfg(unix)]
@@ -489,6 +493,8 @@ impl Cache {
             }
         }
         let now = Utc::now();
+        let attention_cutoff =
+            now - chrono::Duration::days(i64::from(self.attention_retention_days()));
         for update in updates {
             let result = match update.result {
                 Ok(data)
@@ -517,7 +523,13 @@ impl Cache {
                 health.last_attempt_at = Some(now);
             }
             match result {
-                Ok(data) => {
+                Ok(mut data) => {
+                    self.expire_source_attention(
+                        &snapshot.board.issues,
+                        &snapshot.issue_weblinks,
+                        &mut data,
+                        attention_cutoff,
+                    );
                     snapshot
                         .board
                         .issues
@@ -661,6 +673,54 @@ impl Cache {
         Ok(snapshot)
     }
 }
+
+impl Cache {
+    fn expire_source_attention(
+        &self,
+        visible_issues: &[JiraIssue],
+        visible_weblinks: &[(String, String)],
+        data: &mut SourceData,
+        cutoff: Time,
+    ) {
+        let overview =
+            |issue: &JiraIssue| {
+                issue.is_assigned_to_me
+                    && self.config.jira.as_ref().is_some_and(|jira| {
+                        jira.projects.iter().any(|key| key == &issue.project_key)
+                    })
+            };
+        let mut expired = std::collections::BTreeSet::new();
+        data.issues.retain_mut(|issue| {
+            if crate::attention::expire(&mut issue.attention, cutoff) && !overview(issue) {
+                expired.insert(issue.key.clone());
+                return false;
+            }
+            true
+        });
+        data.issue_weblinks
+            .retain(|(key, _)| !expired.contains(key));
+        if data.pull_requests.is_empty() {
+            return;
+        }
+        let visible_keys: std::collections::BTreeSet<_> =
+            visible_issues.iter().map(|i| i.key.as_str()).collect();
+        let linked_urls: std::collections::BTreeSet<_> = visible_weblinks
+            .iter()
+            .filter(|(key, _)| visible_keys.contains(key.as_str()))
+            .map(|(_, url)| url.as_str())
+            .collect();
+        data.pull_requests.retain_mut(|pr| {
+            !crate::attention::expire(&mut pr.attention, cutoff)
+                || pr.is_mine
+                || linked_urls.contains(pr.url.as_str())
+                || pr
+                    .linked_issue_keys
+                    .iter()
+                    .any(|key| visible_keys.contains(key.as_str()))
+        });
+    }
+}
+
 fn reconcile_links(snapshot: &mut Snapshot) {
     // Cross-source links are derived, not durable authorizations to retain another
     // account's private issue keys or PR IDs after a principal is quarantined.

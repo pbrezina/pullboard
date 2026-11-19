@@ -124,6 +124,8 @@ impl Secret {
     }
 }
 
+pub const DEFAULT_ATTENTION_RETENTION_DAYS: u32 = 180;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -131,6 +133,7 @@ pub struct Config {
     pub read_only_test_mode: bool,
     pub refresh_interval_seconds: u64,
     pub attention_default_days: u32,
+    pub attention_retention_days: u32,
     pub upstream: Upstream,
     pub jira: Option<JiraConfig>,
     pub forges: Vec<ForgeConfig>,
@@ -143,6 +146,7 @@ impl Default for Config {
             read_only_test_mode: true,
             refresh_interval_seconds: 3600,
             attention_default_days: 14,
+            attention_retention_days: DEFAULT_ATTENTION_RETENTION_DAYS,
             upstream: Upstream::default(),
             jira: None,
             forges: vec![],
@@ -501,6 +505,10 @@ impl Config {
         anyhow::ensure!(
             (1..=36500).contains(&self.attention_default_days),
             "attention_default_days must be a whole number from 1 to 36500"
+        );
+        anyhow::ensure!(
+            (1..=36500).contains(&self.attention_retention_days),
+            "attention_retention_days must be a whole number from 1 to 36500"
         );
         anyhow::ensure!(
             self.forges.len() <= 64,

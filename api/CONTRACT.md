@@ -1,4 +1,4 @@
-# PullBoard REST contract — v1.8.0 (attention window)
+# PullBoard REST contract — v1.8.0 (attention window and retention)
 
 The normative machine-readable schemas are in [openapi.json](openapi.json).
 All paths are same-origin under `/api`, JSON uses `snake_case`, IDs are opaque strings
@@ -6,7 +6,7 @@ All paths are same-origin under `/api`, JSON uses `snake_case`, IDs are opaque s
 explicitly as `null`. Arrays are always present (possibly empty). Unknown request
 fields are rejected. Error responses use `ErrorResponse` even for routing, extraction,
 validation and upstream errors. No endpoint returns secrets or raw upstream errors.
-This extends v1.7.0 with an attention display window. Ordered sprint board/pattern
+This extends v1.7.0 with an attention display window and retention. Ordered sprint board/pattern
 configuration is unchanged: the first board and first pattern identify the user's current
 sprint; all boards supply display sprints and all patterns allow creation choices.
 Ticket-favoring concurrent refresh, independent source publications, shared
@@ -466,11 +466,13 @@ Jira discovery uses two separate server-side JQL searches:
   assignee = currentUser() AND status != "Closed"`. The placeholder is the configured
   project-key list, not a hardcoded project or an omitted restriction.
 - Mention candidates: `status != "Closed" AND (description ~ currentUser() OR
-  comment ~ currentUser())`, across **all accessible projects**, without a project
-  or assignee restriction.
+  comment ~ currentUser()) AND updated >= "-Nd"`, across **all accessible projects**,
+  without a project or assignee restriction. `N` is the configured retention days
+  plus one day for query timing/precision. JQL `updated` is a coarse candidate
+  filter, not a verified mention timestamp.
 
-Both searches use bounded page sizes and follow complete upstream pagination; there
-is no date cutoff or arbitrary result cap that silently drops older mentions.
+Both searches use bounded page sizes and follow complete upstream pagination.
+Assigned discovery has no date cutoff, and neither search has an arbitrary result cap.
 Neither query filters resolution or status category. Never scan all project issues
 or fall back to an unfiltered query if mention search fails. A search/page failure
 fails the Jira source refresh and retains its last-good snapshot with stale/error
@@ -506,8 +508,19 @@ case-insensitive. `Context.attention_default_days` is the configured display def
 from optional YAML `attention_default_days` (omitted: 14; valid: 1–36500). The
 Attention-only window is a rolling number of 24-hour days; an item matches if any
 unanswered thread is at or after the cutoff. It does not modify attention or upstream
-queries. Reset restores this default; All time bypasses the window. Attention badges
-count unfiltered items; show X of Y with filters.
+queries. Reset restores this default; All retained bypasses the display window.
+Attention badges count all retained items; show X of Y with filters.
+
+Optional YAML `attention_retention_days` (omitted: 180; valid: 1–36500) sets the rolling
+server retention cutoff at each successful source publication. Remove threads strictly
+older than the cutoff by `latest_unanswered_at` and recompute `waiting_since` and
+`reasons` from retained threads. Preserve a thread with unverified latest time until
+history is re-evaluated. Drop cards whose only remaining reason to be cached was
+expired attention; configured-project issues assigned to the viewer, their open PRs,
+and otherwise discoverable open PRs linked to Jira issues in the committed board
+remain without expired attention. Pruning is part of the successful source transaction;
+startup, failed refresh, and an options-only publication do not prune. Forge discovery
+may still need full history when no verified date bound covers every relevant event.
 
 `Board.sprints` returns **every** active/future sprint returned by all configured
 `board_ids`, including foreign-origin and nonmatching names. Fully paginate each board

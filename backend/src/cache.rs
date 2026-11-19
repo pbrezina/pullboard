@@ -27,7 +27,18 @@ pub struct SourceData {
     pub identity: Option<Identity>,
     pub coverage_notes: Vec<String>,
     pub issue_weblinks: Vec<(String, String)>,
+    #[serde(default)]
+    pub jira_read_revision: Option<u64>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ConfirmedWeblink {
+    issue_id: String,
+    issue_key: String,
+    url: String,
+    revision: u64,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {
     #[serde(default)]
@@ -43,6 +54,10 @@ pub struct Snapshot {
     pub issue_weblinks: Vec<(String, String)>,
     #[serde(default)]
     pub source_accounts: std::collections::BTreeMap<String, String>,
+    // Only needed for reads in this process. Startup restores scoped weblinks,
+    // not these markers, because no read survives a cache restart.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    confirmed_weblinks: Vec<ConfirmedWeblink>,
 }
 pub struct SourceUpdate {
     pub source_id: String,
@@ -182,6 +197,7 @@ impl Cache {
                 snapshot.jira_project = None;
                 snapshot.board.sprints.clear();
                 snapshot.issue_weblinks.clear();
+                snapshot.confirmed_weblinks.clear();
             }
             if let Some(health) = snapshot
                 .board
@@ -345,6 +361,50 @@ impl Cache {
         }
         self.resolutions.insert(expected_scope.into(), issue)
     }
+    /// Publish a confirmed Jira write without replacing either source's inventory.
+    pub(crate) async fn publish_confirmed_link(
+        &self,
+        selected: &Snapshot,
+        issue: &JiraIssue,
+        pr: &PullRequest,
+    ) -> Result<()> {
+        let _guard = self.writer.lock().await;
+        let mut snapshot = self.read().await?;
+        let same_scope = |id| {
+            selected
+                .source_accounts
+                .get(id)
+                .is_some_and(|scope| snapshot.source_accounts.get(id) == Some(scope))
+        };
+        if !same_scope(&issue.source_id)
+            || !same_scope(&pr.source_id)
+            || !snapshot.board.issues.iter().any(|current| {
+                current.id == issue.id
+                    && current.key == issue.key
+                    && current.source_id == issue.source_id
+            })
+            || !snapshot.board.pull_requests.iter().any(|current| {
+                current.id == pr.id && current.url == pr.url && current.source_id == pr.source_id
+            })
+        {
+            return Err(Error::unavailable());
+        }
+        let weblink = (issue.key.clone(), pr.url.clone());
+        if snapshot.issue_weblinks.contains(&weblink) {
+            return Ok(());
+        }
+        snapshot.issue_weblinks.push(weblink);
+        snapshot.board.revision = snapshot.board.revision.saturating_add(1);
+        snapshot.board.generated_at = Some(Utc::now());
+        snapshot.confirmed_weblinks.push(ConfirmedWeblink {
+            issue_id: issue.id.clone(),
+            issue_key: issue.key.clone(),
+            url: pr.url.clone(),
+            revision: snapshot.board.revision,
+        });
+        reconcile_links(&mut snapshot);
+        self.store(&snapshot).await
+    }
     async fn store(&self, snapshot: &Snapshot) -> Result<()> {
         let json = serde_json::to_string(snapshot).map_err(|_| Error::internal())?;
         let mut tx = self.pool.begin().await.map_err(|_| Error::internal())?;
@@ -479,6 +539,22 @@ impl Cache {
                         }
                         snapshot.board.sprints = data.sprints;
                         snapshot.issue_weblinks = data.issue_weblinks;
+                        // An older read cannot tell us whether this write is still
+                        // present. Once a post-commit read succeeds, use its data
+                        // as-is, even if Jira no longer returns the link.
+                        snapshot.confirmed_weblinks.retain(|link| {
+                            data.jira_read_revision
+                                .is_some_and(|revision| revision < link.revision)
+                                && snapshot.board.issues.iter().any(|issue| {
+                                    issue.id == link.issue_id && issue.key == link.issue_key
+                                })
+                        });
+                        for link in &snapshot.confirmed_weblinks {
+                            let weblink = (link.issue_key.clone(), link.url.clone());
+                            if !snapshot.issue_weblinks.contains(&weblink) {
+                                snapshot.issue_weblinks.push(weblink);
+                            }
+                        }
                     }
                     if let Some(identity) = data.identity {
                         snapshot

@@ -302,6 +302,9 @@ If Jira accepted creation but returned no safely usable key, 200 `outcome: "crea
 may have `issue: null` **only with at least one nonblank warning**. Treat it as accepted
 success, show the message/warnings without an issue link, skip key-dependent follow-ups
 and never retry creation automatically. No key/URL/cache entry is fabricated; the
-normal live-write refresh still applies. Existing single-pair many-to-many linking
-and duplicate-link idempotency are unchanged; no batch/unlink endpoint is added.
+normal creation-triggered refresh still applies. A confirmed standalone PR link
+updates both sides in the shared board revision without starting a sync. Clients
+may reload the local board instead. If the board update fails after Jira succeeds,
+the result still reports `linked` with an explanatory message. Single-pair linking
+and duplicate-link idempotency are unchanged.
 Contract tests use the shared JSON schema against backend responses.

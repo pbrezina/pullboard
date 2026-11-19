@@ -81,9 +81,10 @@ Jira creation options are a separate complete atomic generation and health domai
 Failure in one domain must not undo or delay another domain's successful publication.
 
 Every cache snapshot change is one SQLite transaction merged from the latest committed
-state under serialized publication: card replacement, persisted health changes, options
-publication, and scope quarantine/restoration. Reconcile cross-source links against that
-latest state on each publication, without lost updates or mixed source collections.
+state under serialized publication: card replacement, confirmed standalone Jira links,
+persisted health changes, options publication, and scope quarantine/restoration.
+Reconcile cross-source links against that latest state on each publication, without
+lost updates or mixed source collections.
 Reads never observe a delete/insert gap. `Board.revision` is an unsigned 64-bit counter
 increased on each such commit, including options-only commits even if cards do not
 change. `generated_at` is the latest snapshot commit time, null before any publication.
@@ -137,9 +138,10 @@ quarantine rules override retention in both domains when identity/scope changes.
 
 `SyncStatus.state` is `idle` or `syncing`. POST sync coalesces with an existing job;
 workers never overlap. Options discovery/eligibility is owned by the same cancellable
-job, not a detached worker. Default interval is 3600 seconds. A successful live Jira
-write schedules a refresh (including a follow-up if a refresh is already running);
-simulated writes do not mutate the cache or schedule a write-triggered refresh.
+job, not a detached worker. Default interval is 3600 seconds. Successful live Jira
+ticket creation schedules a refresh (including a follow-up if a refresh is already
+running). Standalone PR linking publishes only the confirmed relationship and never
+schedules a refresh. Simulated writes do not mutate the cache or schedule a refresh.
 
 ### Per-source progress (normative)
 
@@ -757,6 +759,16 @@ is deliberately absent from the board fixture and remains valid through draft/cr
 4. Drag PR onto issue, or use accessible Link PR action, to POST the PR ID to
    `/jira/issues/{key}/links`. Look up its trusted URL in the cache. Do not accept
    arbitrary upstream URLs. Stable Jira global IDs make duplicate links idempotent.
+   After Jira confirms a new live link, merge it into the current cache if both
+   selected cards are still present under the same verified scopes. Publish both
+   directions together, advancing the board revision without changing sync progress,
+   source health, or attention. Jira ticket reads that started before this commit
+   must not overwrite the confirmed link for a retained issue; a later successful
+   Jira read is authoritative, including for removals. Known duplicates and test-mode
+   links do not publish. After live success or a duplicate, the initiating client
+   may reload the local snapshot; it must not request a sync. If Jira confirms the
+   link but it cannot be published locally, return `linked` with an explanatory
+   message. Do not automatically retry the write or start a refresh.
 
 Read-only test mode validates requests and returns 200 `outcome: "simulated"` with
 a success message. It performs **zero** Jira writes (including links/transitions),

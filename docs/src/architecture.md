@@ -119,8 +119,11 @@ dialogs even if the boolean returns to the same value. Locks are not held across
 all follow-ups use the admitted immutable mode. Switching Test is not revocation:
 admitted live operations may still finish. UI confirmations freeze mode/token pairs;
 polling never rebases them. Conflicts preserve edits and require explicit review and
-a separate submission, never automatic retry. Simulations do not schedule write
-refreshes, unlike successful live actions. Existing M:N single-pair linking is unchanged.
+a separate submission, never automatic retry. Live ticket creation still schedules a
+refresh. A confirmed standalone link publishes the relationship in the shared cache
+without scheduling a refresh or changing source health. An older Jira read cannot
+overwrite the link for a retained issue; a later successful read reconciles Jira changes.
+Simulations do not publish or schedule refreshes.
 
 Both card types share one compact 300px-high layout with visible summaries in
 Upstream Pull Requests (PR repository/people, Jira assignee, link counts and

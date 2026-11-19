@@ -35,9 +35,10 @@ describe('Explicit Jira actions', () => {
     expect(store.board()).toBe(before);
     expect(refresh).not.toHaveBeenCalled();
   });
-  it('does not fabricate a link or refresh on simulated linking', () => {
+  it('does not fabricate a link, reload the cache, or refresh on simulated linking', () => {
     const before = store.board();
     const refresh = vi.spyOn(store, 'refresh');
+    const reload = vi.spyOn(store, 'reload');
     actions.link('DEV-1', pr().id, runtimeMode());
     http.expectOne('/api/jira/issues/DEV-1/links').flush({
       outcome: 'simulated',
@@ -49,9 +50,26 @@ describe('Explicit Jira actions', () => {
     expect(store.board()).toBe(before);
     expect(store.board()?.issues[0].linked_pr_ids).toEqual([]);
     expect(refresh).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
+  });
+  it('reloads the local cache without requesting an upstream sync on live link success', () => {
+    const before = store.board();
+    const refresh = vi.spyOn(store, 'refresh');
+    const reload = vi.spyOn(store, 'reload').mockImplementation(() => {});
+    actions.link('DEV-1', pr().id, runtimeMode());
+    http.expectOne('/api/jira/issues/DEV-1/links').flush({
+      outcome: 'linked',
+      issue_key: 'DEV-1',
+      pull_request_id: pr().id,
+      message: 'Pull request linked.',
+    });
+    expect(store.board()).toBe(before);
+    expect(reload).toHaveBeenCalledOnce();
+    expect(refresh).not.toHaveBeenCalled();
   });
   it('coalesces duplicate in-flight links and reports already linked', () => {
-    vi.spyOn(store, 'refresh').mockImplementation(() => {});
+    const refresh = vi.spyOn(store, 'refresh');
+    const reload = vi.spyOn(store, 'reload').mockImplementation(() => {});
     actions.link('DEV-1', pr().id, runtimeMode());
     actions.link('DEV-1', pr().id, runtimeMode());
     const r = http.expectOne('/api/jira/issues/DEV-1/links');
@@ -64,6 +82,8 @@ describe('Explicit Jira actions', () => {
     });
     expect(actions.linking().size).toBe(0);
     expect(notices.items()[0].message).toContain('Already linked');
+    expect(reload).toHaveBeenCalledOnce();
+    expect(refresh).not.toHaveBeenCalled();
   });
   it('refreshes only after real success, and preserves post-creation warnings', () => {
     const refresh = vi.spyOn(store, 'refresh').mockImplementation(() => {});

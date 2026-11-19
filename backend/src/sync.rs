@@ -418,8 +418,8 @@ impl Syncer {
         }
         Ok(live.sample())
     }
-    /// Unlike manual coalescing, a successful live write requires one follow-up
-    /// if it raced with an already running read. Simulations never call this.
+    /// Unlike manual coalescing, live ticket creation needs a follow-up if it
+    /// races with an already running read. Standalone links publish directly.
     pub async fn after_write(&self) -> Result<SyncStatus> {
         let mut live = self.live.lock().expect("sync lock poisoned");
         live.reconcile(self.cache.committed());

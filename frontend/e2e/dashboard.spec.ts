@@ -58,14 +58,16 @@ async function mockApi(
     degraded?: boolean;
     snapshot?: ReturnType<typeof board>;
     liveLink?: { issueKey: string; prId: string };
-    deferRefreshedBoard?: boolean;
+    deferLinkedBoard?: boolean;
   } = {},
 ) {
   const current = structuredClone(overrides.snapshot ?? snapshot);
-  let pendingLiveLink = false;
-  let refreshRequested = false;
-  let releaseRefreshedBoard!: () => void;
-  const refreshedBoard = new Promise<void>((resolve) => (releaseRefreshedBoard = resolve));
+  let linkCommitted = false;
+  let releaseLinkedBoard!: () => void;
+  const linkedBoard = new Promise<void>((resolve) => (releaseLinkedBoard = resolve));
+  const mode = runtimeMode(
+    overrides.liveLink ? { read_only_test_mode: false, mode_revision: 'mode-live-1' } : {},
+  );
   if (overrides.degraded)
     current.sources[0] = {
       ...current.sources[0],
@@ -96,12 +98,18 @@ async function mockApi(
         });
       if (url.pathname.endsWith('/links')) {
         if (overrides.liveLink) {
-          pendingLiveLink = true;
+          const { issueKey, prId } = overrides.liveLink;
+          const issue = current.issues.find((item) => item.key === issueKey)!;
+          const pr = current.pull_requests.find((item) => item.id === prId)!;
+          issue.linked_pr_ids = [...new Set([...issue.linked_pr_ids, prId])];
+          pr.linked_issue_keys = [...new Set([...pr.linked_issue_keys, issueKey])];
+          current.revision++;
+          linkCommitted = true;
           return route.fulfill({
             json: {
               outcome: 'linked',
-              issue_key: overrides.liveLink.issueKey,
-              pull_request_id: overrides.liveLink.prId,
+              issue_key: issueKey,
+              pull_request_id: prId,
               message: 'Pull request linked.',
             },
           });
@@ -116,13 +124,6 @@ async function mockApi(
         });
       }
       if (url.pathname === '/api/sync') {
-        if (pendingLiveLink && overrides.liveLink) {
-          const issue = current.issues.find((item) => item.key === overrides.liveLink!.issueKey)!;
-          issue.linked_pr_ids = [...new Set([...issue.linked_pr_ids, overrides.liveLink.prId])];
-          pendingLiveLink = false;
-          current.revision++;
-        }
-        refreshRequested = true;
         return route.fulfill({
           status: 202,
           json: {
@@ -154,12 +155,12 @@ async function mockApi(
                 current_sprints: [],
                 jira_projects: [],
               })
-            : context(),
+            : context(mode),
         });
       case '/api/runtime-mode':
-        return route.fulfill({ json: runtimeMode() });
+        return route.fulfill({ json: mode });
       case '/api/board':
-        if (overrides.deferRefreshedBoard && refreshRequested) await refreshedBoard;
+        if (overrides.deferLinkedBoard && linkCommitted) await linkedBoard;
         return route.fulfill({
           json: overrides.empty
             ? board({
@@ -182,7 +183,7 @@ async function mockApi(
           },
         });
       case '/api/health':
-        return route.fulfill({ json: { status: 'ok', version: 'e2e', ...runtimeMode() } });
+        return route.fulfill({ json: { status: 'ok', version: 'e2e', ...mode } });
       case '/api/jira/options':
         return route.fulfill({
           json: {
@@ -199,7 +200,7 @@ async function mockApi(
         });
     }
   });
-  return Object.assign(writes, { releaseRefreshedBoard });
+  return Object.assign(writes, { releaseLinkedBoard });
 }
 
 test('dense three-column workbench, matching card widths and natural heights, light/dark accessibility', async ({
@@ -1151,7 +1152,7 @@ test('PR dragging distinguishes eligible Jira targets without changing Jira card
   await page.mouse.up();
 });
 
-test('a real second PR link is additive only after the refreshed board snapshot arrives', async ({
+test('a real second PR link updates both cards from the local snapshot without starting a sync', async ({
   page,
 }) => {
   const existing = own;
@@ -1168,7 +1169,7 @@ test('a real second PR link is additive only after the refreshed board snapshot 
   const writes = await mockApi(page, {
     snapshot: liveSnapshot,
     liveLink: { issueKey: 'DEV-1', prId: second.id },
-    deferRefreshedBoard: true,
+    deferLinkedBoard: true,
   });
   await page.goto('/');
   await page.getByRole('button', { name: 'Upstream Pull Requests', exact: true }).click();
@@ -1176,21 +1177,23 @@ test('a real second PR link is additive only after the refreshed board snapshot 
   const linked = jira.locator('.linked-pull-requests');
   await expect(linked).toContainText(existing.title);
   await expect(linked).not.toContainText(second.title);
-  await page
-    .locator('.pr-card')
-    .filter({ hasText: second.title })
-    .getByRole('button', { name: 'Link to Jira', exact: true })
-    .click();
+  const secondCard = page.locator('.pr-card').filter({ hasText: second.title });
+  const linkedJira = secondCard.locator('.linked-items');
+  await expect(linkedJira).not.toContainText('DEV-1');
+  await secondCard.getByRole('button', { name: 'Link to Jira', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Link PR to Jira' });
   await dialog.getByLabel('Jira ticket', { exact: true }).selectOption('DEV-1');
-  await dialog.getByRole('button', { name: 'Simulate link' }).click();
+  await dialog.getByRole('button', { name: 'Link PR', exact: true }).click();
   await expect(page.getByText('Linked: Pull request linked.')).toBeVisible();
   await expect(linked).toContainText(existing.title);
   await expect(linked).not.toContainText(second.title);
-  writes.releaseRefreshedBoard();
+  await expect(linkedJira).not.toContainText('DEV-1');
+  writes.releaseLinkedBoard();
   await expect(linked).toContainText(second.title, { timeout: 5_000 });
+  await expect(linked).toContainText(existing.title);
+  await expect(linkedJira).toContainText('DEV-1');
   expect(writes.filter((write) => write.url.endsWith('/links'))).toHaveLength(1);
-  expect(writes.filter((write) => write.url === '/api/sync')).toHaveLength(1);
+  expect(writes.filter((write) => write.url === '/api/sync')).toHaveLength(0);
 });
 
 test('independent tab filters and instance IDs, assigned-only overview, persistent preferences', async ({

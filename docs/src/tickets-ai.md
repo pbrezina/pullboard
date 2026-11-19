@@ -78,6 +78,9 @@ it does not accept an arbitrary remote URL. Stable Jira global IDs make duplicat
 weblinks idempotent. Forge content is never changed.
 Existing many-to-many linking is unchanged: one explicit action links one PR/issue
 pair; a PR or issue may have other links. There is no batch or unlink operation.
+Once Jira confirms the link, both cards update from the local cache without starting
+a sync, even during a refresh. If Jira saves the link but the board cannot be
+updated, the notice says so; the next normal refresh can pick it up.
 
 ## Read-only test mode
 

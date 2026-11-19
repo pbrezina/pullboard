@@ -1,16 +1,23 @@
 //! Real HTTP body gates prove hydration overlap without elapsed-time assertions.
 mod common;
 
-use axum::{Router, body::Body, extract::State, response::Response};
+use axum::{
+    Router,
+    body::Body,
+    extract::State,
+    http::{Request, StatusCode},
+    response::{IntoResponse, Response},
+};
 use common::*;
 use futures_util::stream;
 use pullboard::{
+    api::{App, router},
     cache::{Cache, SourceData, SourceUpdate},
     config::Upstream,
     error::Result,
     forge::{self, Forge},
     jira::Jira,
-    model::Identity,
+    model::{Identity, SourcePhase, SyncStatus},
     sync::Progress,
 };
 use serde_json::{Value, json};
@@ -24,6 +31,8 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{Semaphore, mpsc};
+use tokio_util::sync::CancellationToken;
+use tower::ServiceExt;
 use wiremock::MockServer;
 
 const ITEMS: usize = 5;
@@ -31,6 +40,7 @@ const DEADLINE: Duration = Duration::from_secs(5);
 
 struct Fixture {
     kind: &'static str,
+    accept_link_writes: bool,
     metadata: String,
     gates: Vec<Semaphore>,
     hits: mpsc::UnboundedSender<(usize, String)>,
@@ -152,6 +162,12 @@ fn item_body(kind: &str, item: usize, endpoint: &str) -> Value {
 }
 
 async fn handler(State(state): State<Arc<Fixture>>, request: axum::extract::Request) -> Response {
+    if state.accept_link_writes
+        && request.method() == "POST"
+        && request.uri().path() == "/rest/api/3/issue/DEV-2/remotelink"
+    {
+        return StatusCode::NO_CONTENT.into_response();
+    }
     assert_eq!(request.method(), "GET", "refresh must never write");
     let uri = request.uri().to_string();
     let path = request.uri().path().to_owned();
@@ -220,6 +236,10 @@ async fn handler(State(state): State<Arc<Fixture>>, request: axum::extract::Requ
 }
 
 async fn server(kind: &'static str) -> Server {
+    server_with_link_writes(kind, false).await
+}
+
+async fn server_with_link_writes(kind: &'static str, accept_link_writes: bool) -> Server {
     let metadata = MockServer::start().await;
     if kind == "jira" {
         mock_jira(&metadata).await;
@@ -227,6 +247,7 @@ async fn server(kind: &'static str) -> Server {
     let (tx, rx) = mpsc::unbounded_channel();
     let state = Arc::new(Fixture {
         kind,
+        accept_link_writes,
         metadata: metadata.uri(),
         gates: (0..=ITEMS).map(|_| Semaphore::new(0)).collect(),
         hits: tx,
@@ -251,6 +272,114 @@ async fn server(kind: &'static str) -> Server {
         task,
         _metadata: metadata,
     }
+}
+
+#[tokio::test]
+async fn a_live_link_can_publish_during_gated_jira_hydration_without_queuing_another_sync() {
+    let mut jira_server = server_with_link_writes("jira", true).await;
+    // An unavailable forge retains the seeded, verified PR while Jira refreshes.
+    let forge_server = MockServer::start().await;
+    let mut c = config();
+    c.read_only_test_mode = false;
+    c.jira = Some(jira(&jira_server.base));
+    c.forges = vec![forge("github", &forge_server.uri())];
+    c.upstream.max_concurrent_items = 1;
+    let app = App::build(c).await.unwrap();
+    verify_sources(&app.cache, &app.config).await;
+    let pr = pr();
+    let mut issue = issue();
+    issue.id = "2".into();
+    issue.key = "DEV-2".into();
+    app.cache
+        .publish(vec![
+            SourceUpdate {
+                source_id: "jira".into(),
+                result: Ok(SourceData {
+                    issues: vec![issue],
+                    ..Default::default()
+                }),
+            },
+            SourceUpdate {
+                source_id: pr.source_id.clone(),
+                result: Ok(SourceData {
+                    pull_requests: vec![pr.clone()],
+                    ..Default::default()
+                }),
+            },
+        ])
+        .await
+        .unwrap();
+
+    let cancel = CancellationToken::new();
+    let task = app.sync.spawn(cancel.clone());
+    hits(&mut jira_server, BTreeMap::from([(1, 3)])).await;
+    complete(&mut jira_server, 1).await;
+    hits(&mut jira_server, BTreeMap::from([(2, 3)])).await;
+    let running = app.sync.status().await.unwrap();
+    assert_eq!(running.state, "syncing");
+    let response = tokio::time::timeout(
+        DEADLINE,
+        router(app.clone()).oneshot(
+            Request::post("/api/jira/issues/DEV-2/links")
+                .header("content-type", "application/json")
+                .header("x-pullboard-request", "1")
+                .body(Body::from(
+                    json!({
+                        "pull_request_id": pr.id,
+                        "expected_mode_revision": app.mode.read().mode_revision,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let link_is_visible = async || {
+        let board = app.cache.read().await.unwrap().board;
+        let jira = board.issues.iter().find(|i| i.key == "DEV-2").unwrap();
+        let forge = board.pull_requests.iter().find(|p| p.id == pr.id).unwrap();
+        let linked = jira.linked_pr_ids.contains(&pr.id);
+        assert_eq!(
+            forge.linked_issue_keys.iter().any(|key| key == "DEV-2"),
+            linked
+        );
+        linked
+    };
+    assert!(link_is_visible().await);
+
+    // The blocked weblink response does not include the new link.
+    jira_server.state.release_all();
+    let finish = async || -> SyncStatus {
+        tokio::time::timeout(DEADLINE, async {
+            loop {
+                let status = app.sync.status().await.unwrap();
+                if status.state == "idle" {
+                    assert!(
+                        status.progress.iter().any(|p| {
+                            p.source_id == "jira" && p.phase == SourcePhase::Completed
+                        }),
+                        "Jira did not publish successfully"
+                    );
+                    return status;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap()
+    };
+    assert_eq!(finish().await.started_at, running.started_at);
+    assert!(link_is_visible().await);
+
+    // A later explicit refresh sees Jira without that link and is authoritative.
+    let next = app.sync.request().await.unwrap();
+    assert_eq!(finish().await.started_at, next.started_at);
+    assert!(!link_is_visible().await);
+    cancel.cancel();
+    task.await.unwrap();
 }
 
 enum Adapter {

@@ -42,7 +42,7 @@ export class Actions {
                 ? 'Already linked: '
                 : 'Linked: ';
           this.notices.show(prefix + result.message);
-          if (result.outcome !== 'simulated') this.store.refresh();
+          if (result.outcome !== 'simulated') this.store.reload();
           callbacks?.success();
         },
         error: (e) => {

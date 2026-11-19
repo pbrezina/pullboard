@@ -379,13 +379,17 @@ async fn link(
     if !read_only {
         check_jira_backoff(&snapshot.board)?;
     }
-    let result = jira
+    let mut result = jira
         .link(&key, pr, issue.linked_pr_ids.contains(&pr.id), read_only)
         .await?;
     if result.outcome == "linked"
-        && let Err(e) = app.sync.after_write().await
+        && let Err(error) = app.cache.publish_confirmed_link(&snapshot, issue, pr).await
     {
-        tracing::warn!(code = e.code, "linked PR; refresh scheduling failed");
+        tracing::warn!(
+            code = error.code,
+            "confirmed Jira link could not be published to the board"
+        );
+        result.message = "Jira saved the link, but the local board could not be updated.".into();
     }
     Ok(Json(result))
 }

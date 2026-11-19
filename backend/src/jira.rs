@@ -408,6 +408,8 @@ impl Jira {
         sprints: SharedRead<'_, Vec<Sprint>>,
         progress: crate::sync::Progress,
     ) -> Result<SourceData> {
+        // Take the cutoff before fetching any remotelinks, not at publication.
+        let jira_read_revision = self.cache.get().map(|cache| cache.committed().revision);
         let mut data=SourceData{identity:Some(identity.clone()),jira_project:preparation.project.clone(),coverage_notes:vec!["Jira discovery uses separate fully paginated enhanced JQL searches for assigned issues in configured projects and description/comment mention candidates across all accessible projects, regardless of assignee. Only status Closed is excluded, not resolution or Done category; there is no date cutoff or unfiltered fallback. Search indexing, permissions and deleted history may omit mentions. Explicit ADF mentions and upstream replies determine attention. Mention timers use current description/comment revision timestamps when edit history is unavailable; own replies clear at comment creation timestamps.".into()],..Default::default()};
         let (sprints, (issues, links)) = tokio::try_join!(
             sprints,
@@ -420,6 +422,7 @@ impl Jira {
         data.sprints = (*sprints).clone();
         data.issues = issues;
         data.issue_weblinks = links;
+        data.jira_read_revision = jira_read_revision;
         Ok(data)
     }
     pub(crate) async fn discover_choices(

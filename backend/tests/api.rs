@@ -585,7 +585,7 @@ async fn admitted_action_keeps_mode_through_validation_and_all_live_followups() 
 }
 
 #[tokio::test]
-async fn admitted_live_link_finishes_after_switching_to_test_and_old_tokens_cannot_link_again() {
+async fn admitted_live_link_publishes_without_sync_even_after_switching_to_test() {
     use wiremock::{Mock, ResponseTemplate, matchers::*};
     let server = wiremock::MockServer::start().await;
     let mut c = config();
@@ -615,6 +615,8 @@ async fn admitted_live_link_finishes_after_switching_to_test_and_old_tokens_cann
         ])
         .await
         .unwrap();
+    let sync_before = serde_json::to_value(app.sync.status().await.unwrap()).unwrap();
+    let revision_before = sync_before["board_revision"].as_u64().unwrap();
     let old = app.mode.read();
     let entered = Arc::new(tokio::sync::Notify::new());
     let notify = entered.clone();
@@ -627,12 +629,14 @@ async fn admitted_live_link_finishes_after_switching_to_test_and_old_tokens_cann
                 .set_delay(std::time::Duration::from_millis(150))
         })
         .expect(1)
+        .up_to_n_times(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
         .and(path("/rest/api/3/issue/DEV-2/remotelink"))
         .respond_with(ResponseTemplate::new(204))
         .expect(1)
+        .up_to_n_times(1)
         .mount(&server)
         .await;
     let action_app = app.clone();
@@ -659,6 +663,19 @@ async fn admitted_live_link_finishes_after_switching_to_test_and_old_tokens_cann
     assert_eq!(response["outcome"], "linked");
     validate_schema(&response, "LinkResult");
     assert!(app.mode.read().read_only_test_mode);
+    let (s, board) = call(app.clone(), "GET", "/api/board", json!({}), None, false).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(board["revision"], revision_before + 1);
+    assert_eq!(board["issues"][0]["linked_pr_ids"], json!([pr().id]));
+    assert_eq!(
+        board["pull_requests"][0]["linked_issue_keys"],
+        json!(["DEV-1", "DEV-2"])
+    );
+    let mut sync_after = serde_json::to_value(app.sync.status().await.unwrap()).unwrap();
+    assert_eq!(sync_after["board_revision"], board["revision"]);
+    sync_after["board_revision"] = sync_before["board_revision"].clone();
+    assert_eq!(sync_after, sync_before);
+
     let before = server.received_requests().await.unwrap().len();
     let (s, response) = call(
         app.clone(),
@@ -674,7 +691,28 @@ async fn admitted_live_link_finishes_after_switching_to_test_and_old_tokens_cann
     assert_eq!(s, StatusCode::CONFLICT);
     assert_eq!(response["error"]["code"], "mode_conflict");
     assert_eq!(server.received_requests().await.unwrap().len(), before);
-    assert_eq!(app.sync.status().await.unwrap().state, "syncing");
+
+    let live = app
+        .mode
+        .change(&app.mode.read().mode_revision, false)
+        .unwrap();
+    let (s, result) = call(
+        app.clone(),
+        "POST",
+        "/api/jira/issues/DEV-2/links",
+        json!({"pull_request_id":pr().id,"expected_mode_revision":live.mode_revision}),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(result["outcome"], "already_linked");
+    assert_eq!(server.received_requests().await.unwrap().len(), before);
+    assert_eq!(
+        app.sync.status().await.unwrap().board_revision,
+        revision_before + 1
+    );
+    assert_eq!(app.sync.status().await.unwrap().state, "idle");
 }
 
 #[tokio::test]

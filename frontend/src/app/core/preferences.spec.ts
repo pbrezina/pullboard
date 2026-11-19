@@ -24,7 +24,7 @@ describe('Display preferences', () => {
     expect(p.tab).toBe('overview');
     expect(p.attention.source).toBe('personal');
     expect(p.overview.sprint).toBe('none');
-    expect(Object.keys(p)).toHaveLength(5);
+    expect(Object.keys(p)).toHaveLength(6);
   });
   it('recovers from malformed JSON, wrong types and oversized values', () => {
     expect(parsePreferences('{').tab).toBe('attention');
@@ -53,11 +53,22 @@ describe('Display preferences', () => {
     expect(document.documentElement.dataset['theme']).toBe('dark');
     expect(Object.keys(saved).sort()).toEqual([
       'attention',
+      'attentionWindow',
       'overview',
       'tab',
       'theme',
       'upstream',
     ]);
+  });
+  it('remembers deliberate attention windows and resets only on an Attention reset', () => {
+    const preferences = TestBed.inject(Preferences);
+    preferences.setAttentionWindow('custom:45');
+    preferences.reset('overview');
+    TestBed.tick();
+    expect(parsePreferences(localStorage.getItem(preferenceKey)).attentionWindow).toBe('custom:45');
+    expect(parsePreferences('{"attentionWindow":"custom:0"}').attentionWindow).toBe('default');
+    preferences.reset('attention');
+    expect(preferences.value().attentionWindow).toBe('default');
   });
   it('preserves unavailable actual sprint/source selections and text rather than broadening', () => {
     expect(

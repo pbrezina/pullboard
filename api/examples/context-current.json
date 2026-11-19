@@ -2,6 +2,7 @@
   "read_only_test_mode": true,
   "mode_revision": "mode_mock_boot_a_test_1",
   "refresh_interval_seconds": 3600,
+  "attention_default_days": 14,
   "identities": [
     {"source_id": "jira", "kind": "jira", "account_id": "jira-me", "display_name": "Alex Example", "username": "", "profile_url": null}
   ],

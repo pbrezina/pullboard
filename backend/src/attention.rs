@@ -1,6 +1,6 @@
 //! Attention is computed from upstream events, never from local discovery or commits.
 use crate::model::{Attention, AttentionThread, Reason, Time};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone)]
 pub struct Event {
@@ -8,6 +8,8 @@ pub struct Event {
     pub own: bool,
     pub bot: bool,
     pub opens: Option<Reason>,
+    /// A human follow-up in an identifiable review discussion, not an opener.
+    pub follow_up: bool,
     pub excerpt: String,
 }
 #[derive(Debug, Clone)]
@@ -36,6 +38,7 @@ impl Thread {
                 own: true,
                 bot: false,
                 opens: None,
+                follow_up: false,
                 excerpt: String::new(),
             });
         }
@@ -50,27 +53,32 @@ pub fn compute(threads: Vec<Thread>, partial: bool) -> Option<Attention> {
         }
         // Equal timestamps are not a demonstrably subsequent reply. Preserve attention.
         let cleared = thread.latest_own_reply_at();
-        let mut by_reason = BTreeMap::new();
+        let mut oldest = None;
+        let mut latest = None;
         for e in thread.events {
             if e.bot || e.own || cleared.is_some_and(|at| e.at < at) {
                 continue;
             }
             if let Some(reason) = e.opens {
-                let entry = by_reason.entry(reason).or_insert((e.at, e.excerpt.clone()));
-                if e.at < entry.0 {
-                    *entry = (e.at, e.excerpt);
+                if oldest
+                    .as_ref()
+                    .is_none_or(|(at, r, _)| (e.at, reason) < (*at, *r))
+                {
+                    oldest = Some((e.at, reason, e.excerpt));
                 }
+            }
+            if e.opens.is_some() || e.follow_up {
+                latest = latest.max(Some(e.at));
             }
         }
         // A stream has one timer; choose a deterministic reason if its earliest events tie.
-        if let Some((reason, (at, excerpt))) =
-            by_reason.into_iter().min_by_key(|(r, (at, _))| (*at, *r))
-        {
+        if let Some((at, reason, excerpt)) = oldest {
             unanswered.push(AttentionThread {
                 id: thread.id,
                 url: thread.url,
                 reason,
                 waiting_since: at,
+                latest_unanswered_at: latest,
                 excerpt: excerpt.chars().take(300).collect(),
             });
         }
@@ -110,6 +118,7 @@ mod tests {
             own,
             bot: false,
             opens: Some(Reason::AuthorFeedback),
+            follow_up: false,
             excerpt: "feedback".into(),
         }
     }
@@ -186,6 +195,38 @@ mod tests {
         .unwrap();
         assert_eq!(a.threads[0].id, "a");
         assert_eq!(a.threads.len(), 2);
+    }
+    #[test]
+    fn fresh_follow_up_in_unanswered_discussion_preserves_its_oldest_event() {
+        let mut follow_up = event(2, false);
+        follow_up.opens = None;
+        follow_up.follow_up = true;
+        let mut bot = follow_up.clone();
+        bot.at = event(3, false).at;
+        bot.bot = true;
+        let mut unrelated = event(4, false);
+        unrelated.opens = None;
+        assert!(compute(vec![thread("review", vec![follow_up.clone()])], false).is_none());
+        let a = compute(
+            vec![thread(
+                "review",
+                vec![unrelated, follow_up, bot, event(1, false)],
+            )],
+            false,
+        )
+        .unwrap();
+        assert_eq!(a.waiting_since.timestamp(), 1);
+        assert_eq!(a.threads[0].latest_unanswered_at.unwrap().timestamp(), 2);
+    }
+
+    #[test]
+    fn older_cached_thread_deserializes_without_inventing_freshness() {
+        let a = compute(vec![thread("review", vec![event(1, false)])], false).unwrap();
+        let mut json = serde_json::to_value(&a.threads[0]).unwrap();
+        json.as_object_mut().unwrap().remove("latest_unanswered_at");
+        let cached: AttentionThread = serde_json::from_value(json).unwrap();
+        assert_eq!(cached.latest_unanswered_at, None);
+        assert_eq!(cached.waiting_since, a.waiting_since);
     }
     #[test]
     fn mention_boundaries() {

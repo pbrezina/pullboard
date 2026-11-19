@@ -130,6 +130,7 @@ pub struct Config {
     pub server: Server,
     pub read_only_test_mode: bool,
     pub refresh_interval_seconds: u64,
+    pub attention_default_days: u32,
     pub upstream: Upstream,
     pub jira: Option<JiraConfig>,
     pub forges: Vec<ForgeConfig>,
@@ -141,6 +142,7 @@ impl Default for Config {
             server: Server::default(),
             read_only_test_mode: true,
             refresh_interval_seconds: 3600,
+            attention_default_days: 14,
             upstream: Upstream::default(),
             jira: None,
             forges: vec![],
@@ -495,6 +497,10 @@ impl Config {
         anyhow::ensure!(
             self.server.port >= 1024 && (1..=604800).contains(&self.refresh_interval_seconds),
             "port must be unprivileged (1024..65535) and refresh interval must be 1..604800 seconds"
+        );
+        anyhow::ensure!(
+            (1..=36500).contains(&self.attention_default_days),
+            "attention_default_days must be a whole number from 1 to 36500"
         );
         anyhow::ensure!(
             self.forges.len() <= 64,

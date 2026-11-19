@@ -31,6 +31,17 @@ the application does not invent a timer from local discovery time.
 
 ## Tabs and filters
 
+**Attention window** applies to all Needs Attention queues. It defaults to the last
+14 days when `attention_default_days` is omitted from YAML. Choose a preset or
+enter a custom number of days and press Enter or leave the field. Press Delete in
+the field to clear it and restore the YAML default. PullBoard remembers deliberate
+selections in your browser; Reset filters restores the configured default.
+
+The window uses the latest qualifying unanswered upstream event, so a new mention
+or follow-up in an unanswered review discussion can reveal an old card. The original
+**Waiting since** timestamp still determines its position. **All time** bypasses
+the window. Filtering never dismisses attention or changes upstream discovery.
+
 Upstream Pull Requests shows only Jira issues assigned to you **in configured
 projects** and your own open PRs, sorted by title case-insensitively (stable ID
 tiebreaker). Needs Attention can include verified unanswered Jira mentions from any

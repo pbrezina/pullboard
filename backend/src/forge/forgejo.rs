@@ -268,6 +268,7 @@ impl Forgejo {
                 own: c.user.login.eq_ignore_ascii_case(me),
                 bot: c.user.bot(),
                 opens: reason(&c.body, mine, me),
+                follow_up: false,
                 excerpt: c.body,
             });
         }
@@ -285,6 +286,7 @@ impl Forgejo {
                         own: false,
                         bot: false,
                         opens: Some(Reason::ReviewRequest),
+                        follow_up: false,
                         excerpt: "Review requested".into(),
                     });
                 } else if reviewer.login.eq_ignore_ascii_case(me) && review.state != "PENDING" {
@@ -293,6 +295,7 @@ impl Forgejo {
                         own: true,
                         bot: reviewer.bot(),
                         opens: None,
+                        follow_up: false,
                         excerpt: String::new(),
                     });
                 }
@@ -305,6 +308,7 @@ impl Forgejo {
                         own: reviewer.login.eq_ignore_ascii_case(me),
                         bot: reviewer.bot(),
                         opens: reason(body, mine, me),
+                        follow_up: false,
                         excerpt: body.clone(),
                     });
                 }
@@ -448,6 +452,7 @@ fn add_review_comment(
         // A newly posted unresolved comment can reopen a resolved location, but
         // older explicitly resolved comments must not restart its waiting clock.
         opens: (!resolved).then(|| reason(&c.body, mine, me)).flatten(),
+        follow_up: !resolved,
         excerpt: c.body,
     });
 }

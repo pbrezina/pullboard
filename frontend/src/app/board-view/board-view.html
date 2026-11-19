@@ -34,6 +34,13 @@
     <app-upstream-issues />
   } @else {
     @if (store.context(); as context) {
+      @if (tab() === 'attention') {
+        <app-attention-window
+          [selection]="attentionWindow()"
+          [defaultDays]="attentionDefaultDays()"
+          (selectionChange)="preferences.setAttentionWindow($event)"
+        />
+      }
       <app-filter-bar
         [board]="board"
         [context]="context"
@@ -51,7 +58,7 @@
           }
         </p>
         <div>
-          <button class="text-button" (click)="preferences.reset(tab())">Reset filters</button
+          <button class="text-button" (click)="resetFilters()">Reset filters</button
           ><button class="text-button" (click)="showEverything()">Show all work</button>
         </div>
       </div>
@@ -103,7 +110,7 @@
                 <p>
                   {{
                     data.jira.length
-                      ? 'Change sprint or title filters to see more work.'
+                      ? 'Change filters to see more work.'
                       : 'Items appear after source discovery. Check source health for coverage.'
                   }}
                 </p>
@@ -141,7 +148,7 @@
                   <p>
                     {{
                       reviewTotal()
-                        ? 'Change forge or title filters to see more work.'
+                        ? 'Change filters to see more work.'
                         : 'Review requests and mentions in others’ PRs appear here.'
                     }}
                   </p>
@@ -189,7 +196,7 @@
                 <p>
                   {{
                     ownTotal()
-                      ? 'Change forge or title filters to see more work.'
+                      ? 'Change filters to see more work.'
                       : 'Your work appears here after the configured forge instances sync.'
                   }}
                 </p>

@@ -709,6 +709,7 @@ impl Github {
                 own: c.user.login.eq_ignore_ascii_case(me),
                 bot: c.user.bot(),
                 opens: reason(&body, mine, me),
+                follow_up: false,
                 excerpt: body,
             });
         }
@@ -724,6 +725,7 @@ impl Github {
                     own: r.user.login.eq_ignore_ascii_case(me),
                     bot: r.user.bot(),
                     opens: reason(&body, mine, me),
+                    follow_up: false,
                     excerpt: body,
                 });
             }
@@ -752,6 +754,7 @@ impl Github {
                     own: false,
                     bot,
                     opens: Some(Reason::ReviewRequest),
+                    follow_up: false,
                     excerpt: "Review requested".into(),
                 }];
                 events.extend(
@@ -768,6 +771,7 @@ impl Github {
                                 own: true,
                                 bot: false,
                                 opens: None,
+                                follow_up: false,
                                 excerpt: String::new(),
                             })
                         }),
@@ -799,6 +803,7 @@ impl Github {
                     .map(Actor::bot)
                     .unwrap_or_else(|| p.user.bot()),
                 opens: Some(Reason::PrMention),
+                follow_up: false,
                 excerpt: p.body.clone().unwrap_or_default(),
             });
             notes.push("GitHub description mention timers use the current upstream body revision time, not a fabricated discovery time; older body revision history is unavailable.".into());
@@ -888,6 +893,7 @@ impl Github {
                         .is_some_and(|a| a.login.eq_ignore_ascii_case(me)),
                     bot: c.author.as_ref().is_some_and(Actor::bot),
                     opens: reason(&c.body, mine, me),
+                    follow_up: true,
                     excerpt: c.body,
                 })
                 .collect();

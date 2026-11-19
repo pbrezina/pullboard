@@ -715,6 +715,7 @@ impl Jira {
                     own: false,
                     bot: author.as_ref().is_some_and(User::bot),
                     opens: Some(Reason::JiraMention),
+                    follow_up: false,
                     excerpt: description.clone(),
                 });
             }
@@ -792,6 +793,7 @@ impl Jira {
                     own,
                     bot: c.author.bot(),
                     opens: mentioned.then_some(Reason::JiraMention),
+                    follow_up: false,
                     excerpt: adf_text(&c.body),
                 });
             }

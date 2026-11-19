@@ -1,4 +1,4 @@
-# PullBoard REST contract — v1.7.0 (ordered sprint boards and patterns)
+# PullBoard REST contract — v1.8.0 (attention window)
 
 The normative machine-readable schemas are in [openapi.json](openapi.json).
 All paths are same-origin under `/api`, JSON uses `snake_case`, IDs are opaque strings
@@ -6,10 +6,10 @@ All paths are same-origin under `/api`, JSON uses `snake_case`, IDs are opaque s
 explicitly as `null`. Arrays are always present (possibly empty). Unknown request
 fields are rejected. Error responses use `ErrorResponse` even for routing, extraction,
 validation and upstream errors. No endpoint returns secrets or raw upstream errors.
-This extends v1.6.0 with ordered sprint board/pattern configuration and pattern-filtered
-creation choices. The first board and first pattern identify the user's current sprint;
-all boards supply display sprints and all patterns allow creation choices. Wire shapes
-remain unchanged. Ticket-favoring concurrent refresh, independent source publications, shared
+This extends v1.7.0 with an attention display window. Ordered sprint board/pattern
+configuration is unchanged: the first board and first pattern identify the user's current
+sprint; all boards supply display sprints and all patterns allow creation choices.
+Ticket-favoring concurrent refresh, independent source publications, shared
 committed `SyncStatus.board_revision`, and separate nullable `SyncStatus.jira_options`
 readiness, health and progress remain. Jira options remain a complete atomic generation,
 uncoupled from card publication, and may commit before tickets. Existing create request
@@ -439,6 +439,12 @@ clearing still applies independently of status.
 
 `waiting_since` is the oldest still-unanswered upstream timestamp, never local
 discovery time. Never manufacture timestamps when history is inaccessible.
+`AttentionThread.latest_unanswered_at` is the most recent qualifying unanswered
+upstream event in the stream; a human follow-up in an identifiable open review
+discussion can advance it without opening new attention on its own. Bots, own
+events, commits, unrelated edits and resolved or answered discussion do not advance it.
+For a cached thread from before this field was introduced it is null until its source
+refreshes; the display window uses the known `waiting_since` in that case.
 `reasons` is the unique set of thread reasons. Empty attention is `null`.
 Attention columns sort oldest `waiting_since` first; Overview sorts title ascending
 (case-insensitive, stable ID tiebreaker). PR reviewers/assignees exclude self and
@@ -496,7 +502,12 @@ state for zero/multiple matches; it selects all including no sprint for Attentio
 and clears title/forge/repository filters in the reset tab. Upstream issues likewise
 reset to all forges/repositories and empty text. Filter state is independent per tab.
 PR forge filters use instance `source_id`, not just forge type. Title filters are
-case-insensitive. Attention badges count unfiltered items; show X of Y with filters.
+case-insensitive. `Context.attention_default_days` is the configured display default
+from optional YAML `attention_default_days` (omitted: 14; valid: 1–36500). The
+Attention-only window is a rolling number of 24-hour days; an item matches if any
+unanswered thread is at or after the cutoff. It does not modify attention or upstream
+queries. Reset restores this default; All time bypasses the window. Attention badges
+count unfiltered items; show X of Y with filters.
 
 `Board.sprints` returns **every** active/future sprint returned by all configured
 `board_ids`, including foreign-origin and nonmatching names. Fully paginate each board

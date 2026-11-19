@@ -1,4 +1,12 @@
-import { Component, computed, DestroyRef, effect, inject, untracked } from '@angular/core';
+import {
+  Component,
+  computed,
+  DestroyRef,
+  effect,
+  inject,
+  untracked,
+  viewChild,
+} from '@angular/core';
 import { DOCUMENT } from '@angular/common';
 import { CdkDropList, CdkDropListGroup } from '@angular/cdk/drag-drop';
 import { Dialog } from '@angular/cdk/dialog';
@@ -15,9 +23,20 @@ import { Notifications } from '../core/notifications';
 import { LinkDialog } from '../link-dialog/link-dialog';
 import { RuntimeMode } from '../core/runtime-mode';
 import { UpstreamIssues } from '../upstream-issues/upstream-issues';
+import { AttentionWindowControl } from '../attention-window/attention-window';
+import { attentionCutoff, defaultAttentionDays } from '../core/attention-window';
+import { Clock } from '../core/clock';
 
 @Component({
-  imports: [CdkDropList, CdkDropListGroup, IssueCard, PrCard, FilterBar, UpstreamIssues],
+  imports: [
+    CdkDropList,
+    CdkDropListGroup,
+    IssueCard,
+    PrCard,
+    FilterBar,
+    UpstreamIssues,
+    AttentionWindowControl,
+  ],
   selector: 'app-board-view',
   styleUrl: './board-view.css',
   templateUrl: './board-view.html',
@@ -30,14 +49,28 @@ export class BoardView {
   private readonly destroy = inject(DestroyRef);
   private readonly document = inject(DOCUMENT);
   private readonly notices = inject(Notifications);
+  private readonly clock = inject(Clock);
+  private readonly attentionControl = viewChild(AttentionWindowControl);
   private openingTicket = false;
   readonly tab = computed(() => this.preferences.value().tab);
   readonly filters = computed(() => this.preferences.value()[this.tab()]);
+  readonly attentionWindow = computed(() => this.preferences.value().attentionWindow);
+  readonly attentionDefaultDays = computed(
+    () => this.store.context()?.attention_default_days ?? defaultAttentionDays,
+  );
   readonly data = computed(() => {
     const b = this.store.board();
     const tab = this.tab();
     return b && tab !== 'upstream'
-      ? queues(b, tab, this.filters(), this.store.context()?.jira_projects ?? [])
+      ? queues(
+          b,
+          tab,
+          this.filters(),
+          this.store.context()?.jira_projects ?? [],
+          tab === 'attention' && this.attentionWindow() !== 'all'
+            ? attentionCutoff(this.attentionWindow(), this.attentionDefaultDays(), this.clock.now())
+            : null,
+        )
       : null;
   });
   readonly unfilteredAttention = computed(() => {
@@ -60,7 +93,15 @@ export class BoardView {
     this.preferences.setFilters(this.tab(), filters);
   }
   showEverything() {
+    if (this.tab() === 'attention') {
+      this.attentionControl()?.clearDraft();
+      this.preferences.setAttentionWindow('all');
+    }
     this.changeFilters({ ...defaultFilters(), sprint: 'all' });
+  }
+  resetFilters() {
+    this.attentionControl()?.clearDraft();
+    this.preferences.reset(this.tab());
   }
   async ticket(pr: PullRequest, purpose: Purpose) {
     const mode = this.mode.value();

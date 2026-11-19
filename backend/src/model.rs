@@ -58,6 +58,8 @@ pub struct AttentionThread {
     pub url: String,
     pub reason: Reason,
     pub waiting_since: Time,
+    #[serde(default)]
+    pub latest_unanswered_at: Option<Time>,
     pub excerpt: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -242,6 +244,7 @@ pub struct Context {
     pub read_only_test_mode: bool,
     pub mode_revision: String,
     pub refresh_interval_seconds: u64,
+    pub attention_default_days: u32,
     pub identities: Vec<Identity>,
     pub current_project: Option<Project>,
     pub current_sprints: Vec<Sprint>,

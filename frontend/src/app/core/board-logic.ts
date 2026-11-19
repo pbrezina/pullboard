@@ -9,6 +9,7 @@ import type {
   Sprint,
   UpstreamIssue,
 } from './api-types';
+import { matchesAttentionWindow } from './attention-window';
 
 export type Tab = 'attention' | 'overview' | 'upstream';
 export interface Filters {
@@ -67,6 +68,7 @@ export function queues(
   tab: Exclude<Tab, 'upstream'>,
   filters: Filters,
   projects: Project[],
+  cutoff: number | null = null,
 ) {
   const sort = tab === 'attention' ? byWaiting : byTitle;
   const jira = board.issues
@@ -82,12 +84,14 @@ export function queues(
   const issues = jira.filter(
     (i) =>
       matchesSprint(i, filters.sprint, board.sprints) &&
+      (tab !== 'attention' || matchesAttentionWindow(i.attention, cutoff)) &&
       i.title.toLocaleLowerCase().includes(filters.jiraTitle.trim().toLocaleLowerCase()),
   );
   const pullRequests = prs.filter(
     (p) =>
       (filters.source === 'all' || p.source_id === filters.source) &&
       (filters.repository === 'all' || repositoryFilterValue(p) === filters.repository) &&
+      (tab !== 'attention' || matchesAttentionWindow(p.attention, cutoff)) &&
       p.title.toLocaleLowerCase().includes(filters.prTitle.trim().toLocaleLowerCase()),
   );
   return {

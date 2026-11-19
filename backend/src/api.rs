@@ -239,6 +239,7 @@ async fn context(State(app): State<Arc<App>>) -> Result<Json<Context>> {
         read_only_test_mode: mode.read_only_test_mode,
         mode_revision: mode.mode_revision,
         refresh_interval_seconds: app.config.refresh_interval_seconds,
+        attention_default_days: app.config.attention_default_days,
         identities: snapshot.identities,
         current_project,
         current_sprints,

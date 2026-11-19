@@ -228,3 +228,15 @@ fn helper_rejects_unbounded_transport_configuration() {
     };
     assert!(ReadHttp::new("https://jira.example", HeaderMap::new(), &limits).is_err());
 }
+#[test]
+fn optional_attention_window_default_and_bounds() {
+    assert_eq!(Config::from_yaml("{}").unwrap().attention_default_days, 14);
+    assert_eq!(
+        Config::from_yaml("attention_default_days: 45")
+            .unwrap()
+            .attention_default_days,
+        45
+    );
+    assert!(Config::from_yaml("attention_default_days: 0").is_err());
+    assert!(Config::from_yaml("attention_default_days: 36501").is_err());
+}

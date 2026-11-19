@@ -305,6 +305,7 @@ impl Gitlab {
                             own: false,
                             bot: n.author.bot(),
                             opens: Some(Reason::ReviewRequest),
+                            follow_up: false,
                             excerpt: n.body.clone(),
                         });
                     }
@@ -317,6 +318,7 @@ impl Gitlab {
                             own: true,
                             bot: n.author.bot(),
                             opens: None,
+                            follow_up: false,
                             excerpt: String::new(),
                         });
                     }
@@ -333,6 +335,7 @@ impl Gitlab {
                     } else {
                         None
                     },
+                    follow_up: !d.individual_note && !n.resolved,
                     excerpt: n.body,
                 };
                 if d.individual_note {
@@ -376,6 +379,7 @@ impl Gitlab {
                 own: false,
                 bot: description_author.bot(),
                 opens: Some(Reason::PrMention),
+                follow_up: false,
                 excerpt: description.clone(),
             });
         }

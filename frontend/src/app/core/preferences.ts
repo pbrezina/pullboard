@@ -2,12 +2,14 @@ import { DestroyRef, effect, inject, Service, signal } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
 import { defaultFilters, type Filters, type Tab } from './board-logic';
 import type { Board, Context } from './api-types';
+import { parseAttentionWindow, type AttentionWindow } from './attention-window';
 
 export type Theme = 'light' | 'dark' | 'system';
 export interface DisplayPreferences {
   tab: Tab;
   theme: Theme;
   attention: Filters;
+  attentionWindow: AttentionWindow;
   overview: Filters;
   upstream: Filters;
 }
@@ -16,6 +18,7 @@ const blank = (): DisplayPreferences => ({
   tab: 'attention',
   theme: 'system',
   attention: defaultFilters('attention'),
+  attentionWindow: 'default',
   overview: defaultFilters('overview'),
   upstream: defaultFilters('upstream'),
 });
@@ -27,6 +30,7 @@ export function parsePreferences(raw: string | null): DisplayPreferences {
     const item = data as Record<string, unknown>;
     if (item['tab'] === 'overview' || item['tab'] === 'upstream') result.tab = item['tab'];
     if (item['theme'] === 'light' || item['theme'] === 'dark') result.theme = item['theme'];
+    result.attentionWindow = parseAttentionWindow(item['attentionWindow']);
     for (const tab of ['attention', 'overview', 'upstream'] as const) {
       const f = item[tab];
       if (f && typeof f === 'object')
@@ -120,6 +124,9 @@ export class Preferences {
   setTheme(theme: Theme) {
     this.value.update((p) => ({ ...p, theme }));
   }
+  setAttentionWindow(window: AttentionWindow) {
+    this.value.update((p) => ({ ...p, attentionWindow: window }));
+  }
   setFilters(tab: Tab, filters: Filters) {
     if (tab === 'overview' && filters.sprint !== this.value().overview.sprint)
       this.overviewInitialized = true;
@@ -132,7 +139,11 @@ export class Preferences {
       filters.sprint = sprints.length === 1 ? sprints[0].id : '';
       this.overviewInitialized = !!this.currentContext?.current_project;
     }
-    this.value.update((p) => ({ ...p, [tab]: filters }));
+    this.value.update((p) => ({
+      ...p,
+      [tab]: filters,
+      attentionWindow: tab === 'attention' ? 'default' : p.attentionWindow,
+    }));
   }
   validate(board: Board, context: Context) {
     this.currentContext = context;

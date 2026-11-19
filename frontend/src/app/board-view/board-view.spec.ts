@@ -6,7 +6,17 @@ import { BoardStore } from '../core/board-store';
 import { Preferences } from '../core/preferences';
 import { RuntimeMode } from '../core/runtime-mode';
 import type { Purpose } from '../core/api-types';
-import { board, context, foreignMention, issue, pr, runtimeMode, sync } from '../testing/fixtures';
+import {
+  attention,
+  board,
+  context,
+  foreignMention,
+  issue,
+  pr,
+  runtimeMode,
+  sync,
+} from '../testing/fixtures';
+import { Clock } from '../core/clock';
 describe('Board views', () => {
   const open = vi.fn();
   const openDialogs: unknown[] = [];
@@ -58,6 +68,84 @@ describe('Board views', () => {
     f.componentInstance.showEverything();
     await f.whenStable();
     expect(f.componentInstance.data()?.shown).toBe(2);
+  });
+  it('applies the first-row window to all three queues using the latest unanswered event', async () => {
+    TestBed.inject(Clock).now.set(Date.parse('2026-11-25T12:00:00Z'));
+    const old = attention('2026-10-25T12:00:00Z');
+    const store = TestBed.inject(BoardStore);
+    store.board.set(
+      board({
+        issues: [issue({ attention: old })],
+        pull_requests: [
+          pr({ id: 'old', is_mine: false, attention: old }),
+          pr({
+            id: 'fresh',
+            is_mine: true,
+            attention: {
+              ...old,
+              threads: [{ ...old.threads[0], latest_unanswered_at: '2026-11-11T12:00:00Z' }],
+            },
+          }),
+        ],
+      }),
+    );
+    const f = TestBed.createComponent(BoardView);
+    await f.whenStable();
+    const element: HTMLElement = f.nativeElement;
+    expect(element.querySelector('.count-badge')?.textContent).toBe('3');
+    expect(f.componentInstance.data()?.shown).toBe(1);
+    expect(f.componentInstance.data()?.own[0]?.attention?.waiting_since).toBe(old.waiting_since);
+    element.querySelector<HTMLButtonElement>('[data-preset="all"]')?.click();
+    await f.whenStable();
+    expect(f.componentInstance.data()?.shown).toBe(3);
+    expect(TestBed.inject(Preferences).value().attentionWindow).toBe('all');
+  });
+
+  it('applies custom input on Enter or blur, clears it on presets and restores the YAML default on Delete', async () => {
+    TestBed.inject(BoardStore).context.set(context({ attention_default_days: 45 }));
+    const preferences = TestBed.inject(Preferences);
+    const f = TestBed.createComponent(BoardView);
+    await f.whenStable();
+    const element: HTMLElement = f.nativeElement;
+    const input = element.querySelector<HTMLInputElement>('app-attention-window input')!;
+    const edit = (value: string) => {
+      input.value = value;
+      input.dispatchEvent(new Event('input'));
+    };
+    const key = (value: string) =>
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: value }));
+    edit('8');
+    expect(preferences.value().attentionWindow).toBe('default');
+    key('Enter');
+    await f.whenStable();
+    expect(preferences.value().attentionWindow).toBe('custom:8');
+    expect(input.value).toBe('8');
+    edit('9');
+    input.dispatchEvent(new FocusEvent('blur'));
+    await f.whenStable();
+    expect(preferences.value().attentionWindow).toBe('custom:9');
+    edit('0');
+    key('Enter');
+    await f.whenStable();
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(preferences.value().attentionWindow).toBe('custom:9');
+    const preset = element.querySelector<HTMLButtonElement>('[data-preset="7"]')!;
+    edit('10');
+    input.dispatchEvent(new FocusEvent('blur', { relatedTarget: preset }));
+    expect(preferences.value().attentionWindow).toBe('custom:10');
+    edit('11');
+    preset.dispatchEvent(new Event('pointerdown'));
+    input.dispatchEvent(new FocusEvent('blur', { relatedTarget: preset }));
+    expect(preferences.value().attentionWindow).toBe('custom:10');
+    preset.click();
+    await f.whenStable();
+    expect(preferences.value().attentionWindow).toBe(7);
+    expect(input.value).toBe('');
+    key('Delete');
+    await f.whenStable();
+    expect(preferences.value().attentionWindow).toBe('default');
+    expect(input.value).toBe('');
+    expect(element.textContent).toContain('Using default: 45 days');
   });
   it('keeps title and sprint selections independent across tab switches', async () => {
     const f = TestBed.createComponent(BoardView);

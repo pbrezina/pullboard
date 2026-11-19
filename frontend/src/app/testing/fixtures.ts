@@ -32,7 +32,8 @@ export const sprint: Sprint = {
   start_at: '2026-11-01T00:00:00Z',
   end_at: '2026-11-15T00:00:00Z',
 };
-export function attention(time = '2026-11-01T12:00:00Z'): Attention {
+const recentAttentionTime = new Date().toISOString();
+export function attention(time = recentAttentionTime): Attention {
   return {
     reasons: ['pr_mention'],
     waiting_since: time,
@@ -42,6 +43,7 @@ export function attention(time = '2026-11-01T12:00:00Z'): Attention {
         url: 'https://forge.example/acme/widget/pull/42#comment-1',
         reason: 'pr_mention',
         waiting_since: time,
+        latest_unanswered_at: time,
         excerpt: 'Could you check the cache behavior?',
       },
     ],
@@ -77,7 +79,9 @@ export function issue(overrides: Partial<JiraIssue> = {}): JiraIssue {
 export function foreignMention(assignedToMe = false): JiraIssue {
   const key = assignedToMe ? 'FOREIGN-2' : 'FOREIGN-1';
   const url = `https://jira.example/browse/${key}`;
-  const mention = attention(assignedToMe ? '2026-10-31T12:00:00Z' : '2026-10-30T12:00:00Z');
+  const mention = attention(
+    new Date(Date.parse(recentAttentionTime) - (assignedToMe ? 1 : 2) * 86_400_000).toISOString(),
+  );
   return issue({
     id: `jira:${key}`,
     key,
@@ -210,6 +214,7 @@ export function context(overrides: Partial<Context> = {}): Context {
     mode_revision: 'mode-test-1',
     read_only_test_mode: true,
     refresh_interval_seconds: 3600,
+    attention_default_days: 14,
     identities: [
       {
         source_id: 'jira',

@@ -21,19 +21,19 @@ export function parseAttentionWindow(value: unknown): AttentionWindow {
   return 'default';
 }
 
+export function attentionWindowDays(window: AttentionWindow, defaultDays: number): number | null {
+  if (window === 'all') return null;
+  if (window === 'default') return defaultDays;
+  return typeof window === 'number' ? window : Number(window.slice(7));
+}
+
 export function attentionCutoff(
   window: AttentionWindow,
   defaultDays: number,
   now: number,
 ): number | null {
-  if (window === 'all') return null;
-  const days =
-    window === 'default'
-      ? defaultDays
-      : typeof window === 'number'
-        ? window
-        : Number(window.slice(7));
-  return now - days * dayMs;
+  const days = attentionWindowDays(window, defaultDays);
+  return days === null ? null : now - days * dayMs;
 }
 
 export function matchesAttentionWindow(

@@ -90,6 +90,28 @@ async fn empty_safe_instance_contract_and_json_routes() {
     let (s, _) = call(app, "POST", "/api/sync", json!({}), None, true).await;
     assert_eq!(s, StatusCode::ACCEPTED);
 }
+
+#[tokio::test]
+async fn context_exposes_effective_attention_display_and_retention_days() {
+    for (yaml, default_days, retention_days) in [
+        ("{}", 14, 180),
+        (
+            "attention_default_days: 45\nattention_retention_days: 120",
+            45,
+            120,
+        ),
+    ] {
+        let mut config = pullboard::config::Config::from_yaml(yaml).unwrap();
+        config.server.database = ":memory:".into();
+        let app = App::build(config).await.unwrap();
+        let (status, context) = call(app, "GET", "/api/context", json!({}), None, false).await;
+        assert_eq!(status, StatusCode::OK);
+        validate_schema(&context, "Context");
+        assert_eq!(context["attention_default_days"], default_days);
+        assert_eq!(context["attention_retention_days"], retention_days);
+    }
+}
+
 #[tokio::test]
 async fn csrf_extraction_unknown_fields_and_nullable_required_fields() {
     let app = App::build(config()).await.unwrap();

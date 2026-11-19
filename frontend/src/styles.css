@@ -132,6 +132,9 @@ label {
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+label,
+.filter-label {
   font-size: 12px;
   font-weight: 500;
   color: var(--muted);

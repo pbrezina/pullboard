@@ -3,8 +3,8 @@
 `api/openapi.json` is the normative OpenAPI 3.1 wire contract; `api/CONTRACT.md`
 explains its invariants. Both live in the repository and must be read before
 API-facing changes. This guide does not define an alternative payload format.
-The current contract is **v1.8.0**: `/api/context` exposes `attention_default_days`
-and attention threads include `latest_unanswered_at` (null for legacy cached
+The current contract is **v1.9.0**: `/api/context` exposes `attention_default_days`
+and `attention_retention_days`. Attention threads include `latest_unanswered_at` (null for legacy cached
 threads). Successful source refreshes prune expired threads before publication.
 Ordered sprint boards and patterns are unchanged. Ticket-favoring concurrent refresh still permits overlapping
 ticket, metadata/group and eligibility progress without new fields/phases.
@@ -16,7 +16,7 @@ contract files for exact schemas, required/null fields and ordering rules.
 | Method | Endpoint | Result |
 | --- | --- | --- |
 | GET | `/api/health` | Process health/version and atomic runtime mode/revision pair; not upstream health |
-| GET | `/api/context` | Verified identities, nullable first configured current project, active first-board/first-pattern sprint matches, discovered projects, attention display default, AI summary and atomic mode/revision pair |
+| GET | `/api/context` | Verified identities, nullable first configured current project, active first-board/first-pattern sprint matches, discovered projects, attention display default and retention limit, AI summary and atomic mode/revision pair |
 | GET | `/api/runtime-mode` | `{read_only_test_mode, mode_revision}` shared by all clients |
 | POST | `/api/runtime-mode` | `{read_only_test_mode, expected_mode_revision}` → resulting mode/revision pair |
 | GET | `/api/board` | Single coherent snapshot, revision and source health |

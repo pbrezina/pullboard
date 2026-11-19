@@ -1,6 +1,7 @@
 import { Component, computed, input, linkedSignal, output } from '@angular/core';
 import {
   attentionPresets,
+  attentionWindowDays,
   parseAttentionDays,
   type AttentionPreset,
   type AttentionWindow,
@@ -14,45 +15,59 @@ import {
 export class AttentionWindowControl {
   readonly selection = input.required<AttentionWindow>();
   readonly defaultDays = input.required<number>();
+  readonly retentionDays = input.required<number>();
   readonly selectionChange = output<AttentionWindow>();
   readonly presets = attentionPresets;
   readonly effective = computed(() =>
     this.selection() === 'default' ? this.defaultDays() : this.selection(),
   );
-  readonly customSelected = computed(() => String(this.selection()).startsWith('custom:'));
-  readonly unlistedDefault = computed(
-    () => this.selection() === 'default' && !this.presets.some((p) => p === this.defaultDays()),
+  readonly allRetained = computed(() => this.effective() === 'all');
+  private readonly editState = linkedSignal({
+    source: this.selection,
+    computation: (): { value: string | null; invalid: boolean } => ({
+      value: null,
+      invalid: false,
+    }),
+  });
+  readonly draft = computed(() =>
+    String(
+      this.editState().value ??
+        attentionWindowDays(this.selection(), this.defaultDays()) ??
+        this.retentionDays(),
+    ),
   );
-  readonly draft = linkedSignal(() =>
-    this.customSelected() ? this.selection().toString().slice(7) : '',
+  readonly invalid = computed(() => this.editState().invalid);
+  readonly fieldSelected = computed(
+    () => !this.presets.some((preset) => preset === this.effective()),
   );
-  readonly invalid = linkedSignal({ source: this.selection, computation: () => false });
-  private edited = false;
   private presetPointer = false;
 
   edit(value: string) {
-    this.edited = true;
-    this.draft.set(value);
-    this.invalid.set(false);
+    this.editState.set({ value, invalid: false });
   }
 
   commit(event: Event) {
     if (event.type === 'blur' && this.presetPointer) return;
     if (event instanceof KeyboardEvent) event.preventDefault();
-    if (!this.edited) return;
-    const days = parseAttentionDays(this.draft().trim());
-    this.invalid.set(days === null);
-    if (days === null) return;
-    this.edited = false;
-    this.draft.set(String(days));
+    const { value } = this.editState();
+    if (value === null) return;
+    const text = value.trim();
+    if (!text) {
+      this.restoreDefault();
+      return;
+    }
+    const days = parseAttentionDays(text);
+    if (days === null) {
+      this.editState.set({ value, invalid: true });
+      return;
+    }
+    this.clearDraft();
     this.selectionChange.emit(`custom:${days}`);
   }
 
   clearDraft() {
-    this.edited = false;
     this.presetPointer = false;
-    this.draft.set('');
-    this.invalid.set(false);
+    this.editState.set({ value: null, invalid: false });
   }
 
   select(preset: AttentionPreset) {
@@ -64,8 +79,8 @@ export class AttentionWindowControl {
     this.presetPointer = active;
   }
 
-  restoreDefault(event: Event) {
-    event.preventDefault();
+  restoreDefault(event?: Event) {
+    event?.preventDefault();
     this.clearDraft();
     this.selectionChange.emit('default');
   }

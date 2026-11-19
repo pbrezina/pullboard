@@ -57,6 +57,7 @@ async function mockApi(
     failure?: boolean;
     degraded?: boolean;
     snapshot?: ReturnType<typeof board>;
+    context?: Partial<ReturnType<typeof context>>;
     liveLink?: { issueKey: string; prId: string };
     deferLinkedBoard?: boolean;
   } = {},
@@ -155,7 +156,7 @@ async function mockApi(
                 current_sprints: [],
                 jira_projects: [],
               })
-            : context(mode),
+            : context({ ...mode, ...overrides.context }),
         });
       case '/api/runtime-mode':
         return route.fulfill({ json: mode });
@@ -1231,6 +1232,70 @@ test('repository and forge filters are mutually exclusive', async ({ page }) => 
   await expect(repository).toHaveValue('all');
   await expect(page.locator('.pr-card')).toHaveCount(1);
   await expect(page.locator('.pr-card')).toContainText(review.title);
+});
+
+test('attention window matches filter labels and keeps the days field and messages inline', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page, {
+    context: { attention_default_days: 45, attention_retention_days: 120 },
+  });
+  await page.goto('/');
+  const window = page.getByRole('region', { name: 'Attention window', exact: true });
+  const heading = window.getByText('Attention window', { exact: true });
+  const sprint = page.locator('app-filter-bar label').first();
+  for (const property of ['font-size', 'font-weight', 'color'] as const) {
+    await expect(heading).toHaveCSS(
+      property,
+      await sprint.evaluate(
+        (element, name) => getComputedStyle(element).getPropertyValue(name),
+        property,
+      ),
+    );
+  }
+  await expect(window).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(window).toHaveCSS('border-inline-start-width', '0px');
+
+  const days = window.getByRole('textbox', { name: 'Attention window in days' });
+  const retained = window.getByRole('button', { name: 'All retained' });
+  const hint = window.locator('#attention-window-hint');
+  await expect(days).toHaveValue('45');
+  await window.getByRole('button', { name: '30 days' }).click();
+  await expect(days).toHaveValue('30');
+  await retained.click();
+  await expect(days).toHaveValue('120');
+  await days.focus();
+  await days.press('Enter');
+  await days.press('Tab');
+  await expect(retained).toHaveAttribute('aria-pressed', 'true');
+
+  await page.setViewportSize({ width: 320, height: 740 });
+  const entry = days.locator('..');
+  await expect(hint).toHaveText('Attention is kept for up to 120 days.');
+  await expect(entry).toHaveCSS('flex-direction', 'row');
+  await expect(entry).toHaveCSS('white-space', 'nowrap');
+  const fieldPosition = (await entry.boundingBox())!;
+  const hintPosition = (await hint.boundingBox())!;
+  expect(hintPosition.x).toBeGreaterThan(fieldPosition.x + fieldPosition.width);
+  expect(hintPosition.y).toBeLessThan(fieldPosition.y + fieldPosition.height);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
+  expect(
+    (await new AxeBuilder({ page }).include('app-attention-window').analyze()).violations,
+  ).toEqual([]);
+
+  await page.getByRole('button', { name: 'Dark theme', exact: true }).click();
+  await days.fill('0');
+  await days.press('Enter');
+  await expect(retained).toHaveAttribute('aria-pressed', 'true');
+  await expect(hint).toHaveText('Enter a whole number from 1 to 36500.');
+  expect(
+    (await new AxeBuilder({ page }).include('app-attention-window').analyze()).violations,
+  ).toEqual([]);
+  await days.fill('');
+  await days.press('Tab');
+  await expect(days).toHaveValue('45');
+  await expect(hint).toBeEmpty();
 });
 
 test('mobile layout has no horizontal overflow and keeps accessible controls', async ({ page }) => {

@@ -73,6 +73,7 @@ describe('Board views', () => {
     TestBed.inject(Clock).now.set(Date.parse('2026-11-25T12:00:00Z'));
     const old = attention('2026-10-25T12:00:00Z');
     const store = TestBed.inject(BoardStore);
+    store.context.set(context({ attention_retention_days: 20 }));
     store.board.set(
       board({
         issues: [issue({ attention: old })],
@@ -101,7 +102,7 @@ describe('Board views', () => {
     expect(TestBed.inject(Preferences).value().attentionWindow).toBe('all');
   });
 
-  it('applies custom input on Enter or blur, clears it on presets and restores the YAML default on Delete', async () => {
+  it('applies custom input on Enter or blur, mirrors presets and restores the YAML default on empty edits or Delete', async () => {
     TestBed.inject(BoardStore).context.set(context({ attention_default_days: 45 }));
     const preferences = TestBed.inject(Preferences);
     const f = TestBed.createComponent(BoardView);
@@ -114,6 +115,7 @@ describe('Board views', () => {
     };
     const key = (value: string) =>
       input.dispatchEvent(new KeyboardEvent('keydown', { key: value }));
+    expect(input.value).toBe('45');
     edit('8');
     expect(preferences.value().attentionWindow).toBe('default');
     key('Enter');
@@ -140,12 +142,57 @@ describe('Board views', () => {
     preset.click();
     await f.whenStable();
     expect(preferences.value().attentionWindow).toBe(7);
-    expect(input.value).toBe('');
+    expect(input.value).toBe('7');
+    edit('');
+    input.dispatchEvent(new FocusEvent('blur'));
+    await f.whenStable();
+    expect(preferences.value().attentionWindow).toBe('default');
+    expect(input.value).toBe('45');
+    edit('8');
+    key('Enter');
+    await f.whenStable();
     key('Delete');
     await f.whenStable();
     expect(preferences.value().attentionWindow).toBe('default');
-    expect(input.value).toBe('');
-    expect(element.textContent).toContain('Using default: 45 days');
+    expect(input.value).toBe('45');
+    edit('');
+    await f.whenStable();
+    key('Enter');
+    await f.whenStable();
+    expect(input.value).toBe('45');
+  });
+
+  it('shows configured retention without adding a date filter and shares the hint with validation', async () => {
+    const store = TestBed.inject(BoardStore);
+    store.context.set(context({ attention_retention_days: 90 }));
+    const preferences = TestBed.inject(Preferences);
+    preferences.setAttentionWindow('all');
+    const f = TestBed.createComponent(BoardView);
+    await f.whenStable();
+    const element: HTMLElement = f.nativeElement;
+    const input = element.querySelector<HTMLInputElement>('app-attention-window input')!;
+    const hint = element.querySelector('#attention-window-hint')!;
+    const all = element.querySelector('[data-preset="all"]')!;
+    const editAndEnter = (value: string) => {
+      input.value = value;
+      input.dispatchEvent(new Event('input'));
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    };
+    expect(input.value).toBe('90');
+    expect(hint.textContent).toContain('Attention is kept for up to 90 days.');
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    input.dispatchEvent(new FocusEvent('blur'));
+    expect(preferences.value().attentionWindow).toBe('all');
+    editAndEnter('0');
+    await f.whenStable();
+    expect(all.getAttribute('aria-pressed')).toBe('true');
+    expect(hint.textContent).toContain('Enter a whole number');
+    expect(hint.textContent).not.toContain('Attention is kept');
+    editAndEnter('');
+    await f.whenStable();
+    expect(preferences.value().attentionWindow).toBe('default');
+    expect(input.value).toBe('14');
+    expect(hint.textContent?.trim()).toBe('');
   });
   it('keeps title and sprint selections independent across tab switches', async () => {
     const f = TestBed.createComponent(BoardView);

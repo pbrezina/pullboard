@@ -38,6 +38,7 @@
         <app-attention-window
           [selection]="attentionWindow()"
           [defaultDays]="attentionDefaultDays()"
+          [retentionDays]="context.attention_retention_days"
           (selectionChange)="preferences.setAttentionWindow($event)"
         />
       }

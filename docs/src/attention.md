@@ -32,15 +32,18 @@ the application does not invent a timer from local discovery time.
 ## Tabs and filters
 
 **Attention window** applies to all Needs Attention queues. It defaults to the last
-14 days when `attention_default_days` is omitted from YAML. Choose a preset or
-enter a custom number of days and press Enter or leave the field. Press Delete in
-the field to clear it and restore the YAML default. PullBoard remembers deliberate
-selections in your browser; Reset filters restores the configured default.
+14 days when `attention_default_days` is omitted from YAML. The days field shows
+the active preset or custom window. Change the number and press Enter or leave
+the field to apply it. Clear the field and commit, or press Delete, to restore
+the YAML default. PullBoard remembers deliberate selections in your browser;
+Reset filters restores the configured default.
 
 The window uses the latest qualifying unanswered upstream event, so a new mention
 or follow-up in an unanswered review discussion can reveal an old card. The original
 **Waiting since** timestamp still determines its position. **All retained** bypasses
-the display window. Filtering never dismisses attention or changes upstream discovery.
+the display window. Its field and inline note show the configured retention limit;
+the number is informational until edited. Filtering never dismisses attention or
+changes upstream discovery.
 
 The server retains attention for `attention_retention_days` (optional YAML, defaults
 to 180 days). A successful source refresh drops threads whose newest qualifying

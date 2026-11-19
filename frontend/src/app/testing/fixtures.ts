@@ -215,6 +215,7 @@ export function context(overrides: Partial<Context> = {}): Context {
     read_only_test_mode: true,
     refresh_interval_seconds: 3600,
     attention_default_days: 14,
+    attention_retention_days: 180,
     identities: [
       {
         source_id: 'jira',

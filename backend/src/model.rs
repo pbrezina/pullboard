@@ -245,6 +245,7 @@ pub struct Context {
     pub mode_revision: String,
     pub refresh_interval_seconds: u64,
     pub attention_default_days: u32,
+    pub attention_retention_days: u32,
     pub identities: Vec<Identity>,
     pub current_project: Option<Project>,
     pub current_sprints: Vec<Sprint>,

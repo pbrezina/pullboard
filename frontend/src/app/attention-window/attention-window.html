@@ -1,48 +1,51 @@
 <section class="attention-window" aria-labelledby="attention-window-label">
-  <div class="scope">
-    <strong id="attention-window-label">Attention window</strong>
-    <span>Applies to all attention queues</span>
+  <span id="attention-window-label" class="filter-label">Attention window</span>
+  <div class="controls">
+    <div class="presets" role="group" aria-label="Attention window presets">
+      @for (preset of presets; track preset) {
+        <button
+          type="button"
+          [attr.data-preset]="preset"
+          [attr.aria-pressed]="effective() === preset"
+          (pointerdown)="setPresetPointer(true)"
+          (pointerup)="setPresetPointer(false)"
+          (pointercancel)="setPresetPointer(false)"
+          (pointerleave)="setPresetPointer(false)"
+          (click)="select(preset)"
+        >
+          {{ preset === 'all' ? 'All retained' : preset + ' days' }}
+        </button>
+      }
+    </div>
+    <div class="entry">
+      <label class="custom" [class.selected]="fieldSelected()">
+        Last
+        <input
+          #days
+          type="text"
+          name="attention-window-days"
+          inputmode="numeric"
+          autocomplete="off"
+          maxlength="6"
+          aria-label="Attention window in days"
+          aria-describedby="attention-window-hint"
+          [attr.aria-invalid]="invalid() ? 'true' : null"
+          [value]="draft()"
+          (input)="edit(days.value)"
+          (keydown.enter)="commit($event)"
+          (keydown.delete)="restoreDefault($event)"
+          (blur)="commit($event)"
+        />
+        days
+      </label>
+      <span id="attention-window-hint" aria-live="polite" class="hint" [class.invalid]="invalid()">
+        @if (invalid()) {
+          Enter a whole number from 1 to 36500.
+        } @else if (allRetained()) {
+          Attention is kept for up to {{ retentionDays() }}
+          {{ retentionDays() === 1 ? 'day' : 'days' }}.
+        }
+      </span>
+    </div>
   </div>
-  <div class="presets" role="group" aria-label="Attention window presets">
-    @for (preset of presets; track preset) {
-      <button
-        type="button"
-        [attr.data-preset]="preset"
-        [attr.aria-pressed]="effective() === preset"
-        (pointerdown)="setPresetPointer(true)"
-        (pointerup)="setPresetPointer(false)"
-        (pointercancel)="setPresetPointer(false)"
-        (pointerleave)="setPresetPointer(false)"
-        (click)="select(preset)"
-      >
-        {{ preset === 'all' ? 'All retained' : preset + ' days' }}
-      </button>
-    }
-  </div>
-  <label class="custom" [class.selected]="customSelected()">
-    Custom: Last
-    <input
-      #days
-      type="text"
-      inputmode="numeric"
-      autocomplete="off"
-      maxlength="6"
-      aria-label="Custom attention window in days"
-      aria-describedby="attention-window-hint"
-      [attr.aria-invalid]="invalid() ? 'true' : null"
-      [value]="draft()"
-      (input)="edit(days.value)"
-      (keydown.enter)="commit($event)"
-      (keydown.delete)="restoreDefault($event)"
-      (blur)="commit($event)"
-    />
-    days
-  </label>
-  <span id="attention-window-hint" aria-live="polite" class="hint" [class.invalid]="invalid()">
-    @if (invalid()) {
-      Enter a whole number from 1 to 36500.
-    } @else if (unlistedDefault()) {
-      Using default: {{ defaultDays() }} days
-    }
-  </span>
 </section>

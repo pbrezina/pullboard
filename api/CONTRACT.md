@@ -1,4 +1,4 @@
-# PullBoard REST contract — v1.8.0 (attention window and retention)
+# PullBoard REST contract — v1.9.0 (attention retention in context)
 
 The normative machine-readable schemas are in [openapi.json](openapi.json).
 All paths are same-origin under `/api`, JSON uses `snake_case`, IDs are opaque strings
@@ -6,7 +6,8 @@ All paths are same-origin under `/api`, JSON uses `snake_case`, IDs are opaque s
 explicitly as `null`. Arrays are always present (possibly empty). Unknown request
 fields are rejected. Error responses use `ErrorResponse` even for routing, extraction,
 validation and upstream errors. No endpoint returns secrets or raw upstream errors.
-This extends v1.7.0 with an attention display window and retention. Ordered sprint board/pattern
+This extends v1.8.0 by exposing the configured attention retention limit in `Context`.
+Attention display and retention rules remain unchanged. Ordered sprint board/pattern
 configuration is unchanged: the first board and first pattern identify the user's current
 sprint; all boards supply display sprints and all patterns allow creation choices.
 Ticket-favoring concurrent refresh, independent source publications, shared
@@ -508,11 +509,14 @@ case-insensitive. `Context.attention_default_days` is the configured display def
 from optional YAML `attention_default_days` (omitted: 14; valid: 1–36500). The
 Attention-only window is a rolling number of 24-hour days; an item matches if any
 unanswered thread is at or after the cutoff. It does not modify attention or upstream
-queries. Reset restores this default; All retained bypasses the display window.
+queries. Reset restores this default; All retained bypasses the display window even
+though the field shows the retention limit. Only an edit applies a custom window;
+committing an empty edit or pressing Delete restores the display default.
 Attention badges count all retained items; show X of Y with filters.
 
-Optional YAML `attention_retention_days` (omitted: 180; valid: 1–36500) sets the rolling
-server retention cutoff at each successful source publication. Remove threads strictly
+`Context.attention_retention_days` gives the configured server limit from optional YAML
+`attention_retention_days` (omitted: 180; valid: 1–36500), for display with All retained.
+The limit sets the rolling cutoff at each successful source publication. Remove threads strictly
 older than the cutoff by `latest_unanswered_at` and recompute `waiting_since` and
 `reasons` from retained threads. Preserve a thread with unverified latest time until
 history is re-evaluated. Drop cards whose only remaining reason to be cached was

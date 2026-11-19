@@ -1,4 +1,4 @@
-/** PullBoard v1.8 wire types. Keep in sync with api/openapi.json. */
+/** PullBoard v1.9 wire types. Keep in sync with api/openapi.json. */
 export type ForgeKind = 'github' | 'gitlab' | 'codeberg' | 'forgejo';
 export type SourceKind = ForgeKind | 'jira';
 export type Purpose = 'implementation' | 'review';
@@ -158,6 +158,7 @@ export interface Project {
 export interface Context extends RuntimeMode {
   refresh_interval_seconds: number;
   attention_default_days: number;
+  attention_retention_days: number;
   identities: Identity[];
   current_project: Project | null;
   current_sprints: Sprint[];

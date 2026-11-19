@@ -355,12 +355,14 @@ impl Gitlab {
             if let Some(latest) = requested.into_iter().max_by_key(|e| e.at) {
                 let mut events = vec![latest];
                 events.extend(reviewed);
-                threads.push(Thread {
+                let mut request = Thread {
                     id: "review-request".into(),
                     url: url.clone(),
                     resolved: false,
                     events,
-                });
+                };
+                request.accept_conversation_reply(&flat);
+                threads.push(request);
             } else {
                 notes.push(format!("Review requested on {url}, but no timestamped request note is accessible. Inspect the MR directly; no timer was fabricated."));
             }

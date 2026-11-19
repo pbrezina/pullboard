@@ -293,7 +293,16 @@ async fn gitlab_uses_account_scopes_private_project_and_paginated_discussions() 
         json!({"path_with_namespace":"group/private"}),
     )
     .await;
-    get_json(&server,"/api/v4/projects/10/merge_requests/7/discussions",json!([{"id":"diff","individual_note":false,"notes":[{"id":1,"body":"Please fix this","author":gitlab_user(2,"alice"),"created_at":"2026-01-02T00:00:00Z","system":false,"resolvable":true,"resolved":false}]},{"id":"flat","individual_note":true,"notes":[{"id":2,"body":"Earlier feedback","author":gitlab_user(2,"alice"),"created_at":"2026-01-01T00:00:00Z","system":false},{"id":3,"body":"My answer","author":gitlab_user(1,"me"),"created_at":"2026-01-03T00:00:00Z","system":false}]}])).await;
+    get_json(
+        &server,
+        "/api/v4/projects/10/merge_requests/7/discussions",
+        json!([
+            {"id":"diff","individual_note":false,"notes":[{"id":1,"body":"Please fix this","author":gitlab_user(2,"alice"),"created_at":"2026-01-02T00:00:00Z","system":false,"resolvable":true,"resolved":false}]},
+            {"id":"flat","individual_note":true,"notes":[{"id":2,"body":"Earlier feedback","author":gitlab_user(2,"alice"),"created_at":"2026-01-01T00:00:00Z","system":false},{"id":3,"body":"My answer","author":gitlab_user(1,"me"),"created_at":"2026-01-03T00:00:00Z","system":false}]},
+            {"id":"request","individual_note":true,"notes":[{"id":4,"body":"requested review from @me","author":gitlab_user(2,"alice"),"created_at":"2026-01-02T00:00:00Z","system":true}]}
+        ]),
+    )
+    .await;
     get_json(
         &server,
         "/api/v4/projects/10/merge_requests/7/commits",
@@ -316,7 +325,9 @@ async fn gitlab_uses_account_scopes_private_project_and_paginated_discussions() 
     assert_eq!(p.state, "draft");
     assert!(p.assignees.is_empty());
     assert_eq!(p.reviewers[0].username, "alice");
-    assert_eq!(p.attention.as_ref().unwrap().threads[0].id, "diff");
+    let threads = &p.attention.as_ref().unwrap().threads;
+    assert_eq!(threads.len(), 1);
+    assert_eq!(threads[0].id, "diff");
     assert!(
         server
             .received_requests()
@@ -340,11 +351,22 @@ async fn codeberg_and_forgejo_discover_account_involvement_across_repositories_r
         // Actual Forgejo responses use null for absent lists and team-only users.
         let p = json!({"number":3,"title":"A change","body":"DEV-1","html_url":"https://forgejo.example/acme/private/pulls/3","user":forgejo_user(1,"me"),"assignees":null,"requested_reviewers":null,"labels":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-03T00:00:00Z"});
         get_json(&server, "/api/v1/repos/acme/private/pulls/3", p).await;
-        get_json(&server,"/api/v1/repos/acme/private/issues/3/comments",json!([{"id":1,"body":"Human feedback","user":forgejo_user(2,"alice"),"created_at":"2026-01-02T00:00:00Z","html_url":null}])).await;
+        get_json(
+            &server,
+            "/api/v1/repos/acme/private/issues/3/comments",
+            json!([
+                {"id":1,"body":"Human feedback","user":forgejo_user(2,"alice"),"created_at":"2026-01-03T00:00:00Z","html_url":null},
+                {"id":2,"body":"My comment","user":forgejo_user(1,"me"),"created_at":"2026-01-02T12:00:00Z","html_url":null}
+            ]),
+        )
+        .await;
         get_json(
             &server,
             "/api/v1/repos/acme/private/pulls/3/reviews",
-            json!([{"id": 7, "user": null, "body": "", "state": "REQUEST_REVIEW", "submitted_at": "2026-01-02T00:00:00Z"}]),
+            json!([
+                {"id":7,"user":null,"body":"","state":"REQUEST_REVIEW","submitted_at":"2026-01-03T00:00:00Z"},
+                {"id":8,"user":forgejo_user(1,"me"),"body":"","state":"REQUEST_REVIEW","submitted_at":"2026-01-02T00:00:00Z"}
+            ]),
         )
         .await;
         get_json(
@@ -365,7 +387,9 @@ async fn codeberg_and_forgejo_discover_account_involvement_across_repositories_r
         assert_eq!(progress.snapshot().unwrap().total_items, Some(1));
         assert_eq!(data.pull_requests.len(), 1);
         assert!(data.pull_requests[0].assignees.is_empty());
-        assert!(data.pull_requests[0].attention.is_some());
+        let threads = &data.pull_requests[0].attention.as_ref().unwrap().threads;
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, "conversation");
         let requests = server.received_requests().await.unwrap();
         for filter in ["created", "assigned", "mentioned", "review_requested"] {
             assert!(

@@ -18,6 +18,30 @@ pub struct Thread {
     pub events: Vec<Event>,
 }
 
+impl Thread {
+    fn latest_own_reply_at(&self) -> Option<Time> {
+        self.events
+            .iter()
+            .filter(|e| e.own && !e.bot)
+            .map(|e| e.at)
+            .max()
+    }
+
+    /// Count a reply in the general conversation as an answer to this review request
+    /// without copying any of that conversation's attention-opening events.
+    pub(crate) fn accept_conversation_reply(&mut self, conversation: &Self) {
+        if let Some(at) = conversation.latest_own_reply_at() {
+            self.events.push(Event {
+                at,
+                own: true,
+                bot: false,
+                opens: None,
+                excerpt: String::new(),
+            });
+        }
+    }
+}
+
 pub fn compute(threads: Vec<Thread>, partial: bool) -> Option<Attention> {
     let mut unanswered = Vec::new();
     for thread in threads {
@@ -25,12 +49,7 @@ pub fn compute(threads: Vec<Thread>, partial: bool) -> Option<Attention> {
             continue;
         }
         // Equal timestamps are not a demonstrably subsequent reply. Preserve attention.
-        let cleared = thread
-            .events
-            .iter()
-            .filter(|e| e.own && !e.bot)
-            .map(|e| e.at)
-            .max();
+        let cleared = thread.latest_own_reply_at();
         let mut by_reason = BTreeMap::new();
         for e in thread.events {
             if e.bot || e.own || cleared.is_some_and(|at| e.at < at) {

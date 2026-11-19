@@ -10,8 +10,11 @@ timestamp**, not the last fetch or last push.
   upstream resolution clears that stream's earlier events; later events reopen it.
 - General flat PR discussion is one separate stream. Replying there does not clear
   unrelated review threads.
-- A submitted qualifying review clears the review-request stream; it does not
-  automatically answer every discussion.
+- A qualifying submitted review or a regular comment in the PR/MR conversation
+  from your account clears the review-request notification on the next successful
+  refresh, if it was posted after the latest request. A new request can bring the
+  notification back. This does not clear unrelated review threads or change the
+  review status on the forge.
 - Pushing a commit never clears attention. Merely opening PullBoard does not either.
 - Bots and your own events do not open attention.
 - Jira explicit account mentions in descriptions/comments open issue attention;

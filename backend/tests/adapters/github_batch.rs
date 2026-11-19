@@ -420,6 +420,89 @@ async fn body_revision_and_submitted_review_timestamps_remain_separate_from_flat
 }
 
 #[tokio::test]
+async fn conversation_comment_answers_pending_review_request_without_submitting_a_review() {
+    for (case, request_day, comment_day, expected_request) in [
+        ("own comment", 2, Some(5), false),
+        ("older comment", 2, Some(1), true),
+        ("equal timestamp", 2, Some(2), true),
+        ("another user's comment", 2, Some(5), true),
+        ("bot comment", 2, Some(5), true),
+        ("push only", 2, None, true),
+        ("requested again", 8, Some(5), true),
+        ("unrelated inline thread", 2, Some(5), false),
+    ] {
+        let server = MockServer::start().await;
+        inventory(&server, &[("acme", "widget", 42)]).await;
+        let mut pull = graph_pull("acme", "widget", 42);
+        pull["author"] = graph_actor(2, "alpha");
+        if let Some(day) = comment_day {
+            let author = match case {
+                "another user's comment" => graph_actor(3, "other"),
+                "bot comment" => {
+                    let mut bot = graph_actor(4, "robot");
+                    bot["__typename"] = json!("Bot");
+                    bot
+                }
+                _ => graph_actor(1, "me"),
+            };
+            pull["comments"] = connection(vec![graph_comment("Can you clarify?", day, author)]);
+        }
+        let unrelated_thread = case == "unrelated inline thread";
+        if unrelated_thread {
+            pull["reviewThreads"] = connection(vec![json!({
+                "id": "inline",
+                "isResolved": false,
+                "comments": connection(vec![graph_comment("Thoughts, @me?", 3, graph_actor(2, "alpha"))])
+            })]);
+        }
+        let requested = |day| {
+            json!({
+                "event": "review_requested",
+                "created_at": format!("2026-01-{day:02}T00:00:00Z"),
+                "requested_reviewer": github_user(1, "me"),
+                "actor": github_user(2, "alpha")
+            })
+        };
+        let mut timeline = vec![requested(2)];
+        if request_day != 2 {
+            timeline.push(requested(request_day));
+        }
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/widget/issues/42/timeline"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(timeline))
+            .with_priority(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        graph_batch(&server, vec![pull]).await;
+        let adapter = forge::build(&forge("github", &server.uri()), &Upstream::default())
+            .await
+            .unwrap();
+        let data = adapter.discover().await.unwrap();
+        let threads = data.pull_requests[0]
+            .attention
+            .as_ref()
+            .map(|a| a.threads.as_slice())
+            .unwrap_or_default();
+        assert_eq!(
+            threads.len(),
+            usize::from(expected_request || unrelated_thread),
+            "{case}"
+        );
+        if expected_request {
+            assert_eq!(threads[0].id, "review-request", "{case}");
+            assert_eq!(
+                threads[0].waiting_since.to_rfc3339(),
+                format!("2026-01-{request_day:02}T00:00:00+00:00"),
+                "{case}"
+            );
+        } else if unrelated_thread {
+            assert_eq!(threads[0].id, "inline", "{case}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn pagination_cycles_missing_cursors_counts_and_page_bound_fail_closed() {
     for mode in ["cycle", "missing", "count", "bound", "null-node"] {
         let server = MockServer::start().await;

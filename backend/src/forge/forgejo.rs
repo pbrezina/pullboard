@@ -325,7 +325,6 @@ impl Forgejo {
             let _ = review.dismissed;
         }
         let mut attention_threads: Vec<_> = threads.into_values().collect();
-        attention_threads.push(flat);
         if p.requested_reviewers
             .iter()
             .any(|u| u.login.eq_ignore_ascii_case(me))
@@ -342,13 +341,16 @@ impl Forgejo {
             {
                 request_events.retain(|e| e.opens.is_none() || e.at == latest);
             }
-            attention_threads.push(Thread {
+            let mut request = Thread {
                 id: "review-request".into(),
                 url: url.clone(),
                 resolved: false,
                 events: request_events,
-            });
+            };
+            request.accept_conversation_reply(&flat);
+            attention_threads.push(request);
         }
+        attention_threads.push(flat);
         let description = p.body.unwrap_or_default();
         let attention = attention::compute(attention_threads, true);
         Ok(PullRequest {

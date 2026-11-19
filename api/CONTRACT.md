@@ -424,8 +424,12 @@ review's summary from attention. Otherwise the summary retains normal flat-conve
 reply-clearing rules; bots, equal-time replies and commits do not count as answers. Standalone summaries
 without associated threads still require a subsequent flat reply. Handling one review
 never clears unrelated flat comments, description mentions or other reviews.
-An unanswered review request is its own stream; a submitted review clears that
-request, but not unrelated review threads. Jira descriptions/comments use explicit
+An unanswered review request is its own stream. A qualifying submitted review or
+a general PR/MR conversation comment from the verified user clears the request
+only if it is strictly later than the latest request and not from a bot. A fresh
+request can reopen attention. Comments still follow normal clearing rules in their
+own conversation; neither action clears unrelated review threads or changes upstream
+review status. Jira descriptions/comments use explicit
 account mentions and the user's subsequent comment clears prior mentions on that
 issue. For Jira, a resolution field or Done status category does not clear attention:
 only status `Closed` excludes the issue; every other status remains open. Reply

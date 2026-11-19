@@ -728,7 +728,7 @@ impl Github {
                 });
             }
         }
-        let mut threads = vec![flat];
+        let mut threads = vec![];
         if p.requested_reviewers
             .iter()
             .any(|u| u.login.eq_ignore_ascii_case(me))
@@ -757,7 +757,11 @@ impl Github {
                 events.extend(
                     reviews
                         .iter()
-                        .filter(|r| r.user.login.eq_ignore_ascii_case(me) && r.state != "PENDING")
+                        .filter(|r| {
+                            r.user.login.eq_ignore_ascii_case(me)
+                                && !r.user.bot()
+                                && r.state != "PENDING"
+                        })
                         .filter_map(|r| {
                             r.submitted_at.map(|at| Event {
                                 at,
@@ -768,12 +772,14 @@ impl Github {
                             })
                         }),
                 );
-                threads.push(Thread {
+                let mut request = Thread {
                     id: "review-request".into(),
                     url: url.clone(),
                     resolved: false,
                     events,
-                });
+                };
+                request.accept_conversation_reply(&flat);
+                threads.push(request);
             } else {
                 notes.push("A GitHub PR has a pending review request, but no upstream request timestamp is accessible. Inspect the PR directly; no timer was fabricated.".into());
             }
@@ -784,7 +790,7 @@ impl Github {
             .map(|e| e.login.eq_ignore_ascii_case(me))
             .unwrap_or(mine);
         if !description_own && attention::mentions(p.body.as_deref().unwrap_or_default(), me) {
-            threads[0].events.push(Event {
+            flat.events.push(Event {
                 at: history.description_at.unwrap_or(p.created_at),
                 own: false,
                 bot: history
@@ -797,6 +803,7 @@ impl Github {
             });
             notes.push("GitHub description mention timers use the current upstream body revision time, not a fabricated discovery time; older body revision history is unavailable.".into());
         }
+        threads.push(flat);
         threads.extend(history.threads);
         let description = p.body.unwrap_or_default();
         Ok(PullRequest {

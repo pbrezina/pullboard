@@ -1938,16 +1938,13 @@ impl Wizard {
             .await?
             .trim()
             .to_owned();
+            let hosted_url = ForgeConfig::default_base_url(kind);
             let default_url = draft
                 .as_ref()
                 .filter(|f| f.kind == kind)
-                .map(|f| f.base_url.as_str())
-                .unwrap_or(match kind {
-                    Kind::Github => "https://api.github.com",
-                    Kind::Gitlab => "https://gitlab.com",
-                    Kind::Codeberg => "https://codeberg.org",
-                    _ => "",
-                });
+                .and_then(|f| f.effective_base_url().ok())
+                .or(hosted_url)
+                .unwrap_or_default();
             let base_url = text(
                 p,
                 "Forge URL (GitHub API base; others instance root):",
@@ -1970,10 +1967,23 @@ impl Wizard {
                     p.say("https://forgejo.org/docs/latest/user/token-scope/");
                 }
             }
-            let changed = saved
-                .as_ref()
-                .is_some_and(|f| f.kind != kind || !same_url(&f.base_url, &base_url));
+            let changed = saved.as_ref().is_some_and(|f| {
+                f.kind != kind
+                    || f.effective_base_url()
+                        .map_or(true, |old_url| !same_url(old_url, &base_url))
+            });
             let token = credential(p, saved.as_ref().map(|f| &f.token), changed).await?;
+            let explicit_saved = draft
+                .as_ref()
+                .filter(|f| f.kind == kind)
+                .and_then(|f| f.base_url.as_deref())
+                .is_some_and(|url| same_url(url, &base_url));
+            let base_url =
+                if !explicit_saved && hosted_url.is_some_and(|url| same_url(url, &base_url)) {
+                    None
+                } else {
+                    Some(base_url)
+                };
             let mut f = draft.clone().unwrap_or_else(|| ForgeConfig {
                 id: next_source_id(kind, &self.config.forges),
                 name: None,
@@ -2203,7 +2213,7 @@ impl Wizard {
                 f.name(),
                 f.id,
                 kind_name(f.kind),
-                f.base_url
+                f.effective_base_url().unwrap_or("Invalid forge URL")
             ));
         }
         for (id, identity) in &self.identities {

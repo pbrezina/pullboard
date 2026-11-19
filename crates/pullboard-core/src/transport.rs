@@ -49,8 +49,9 @@ fn http_client_builder(limits: &Upstream) -> reqwest::ClientBuilder {
 
 impl ReadTransport {
     pub async fn new(config: &ForgeConfig, limits: &Upstream) -> anyhow::Result<Arc<Self>> {
+        let url = config.effective_base_url()?;
         let secret = config.token.resolve().await?;
-        let mut base = url::Url::parse(&format!("{}/", config.base_url.trim_end_matches('/')))
+        let mut base = url::Url::parse(&format!("{}/", url.trim_end_matches('/')))
             .map_err(|_| anyhow::anyhow!("invalid forge base URL"))?;
         // Adapter API suffixes do not change the origin used by this budget.
         let budget = RequestBudget::shared(base.as_str(), limits)?;

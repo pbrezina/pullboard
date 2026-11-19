@@ -174,7 +174,7 @@ fn invalid_bounds_and_base_url_queries_are_rejected() {
     c.refresh_interval_seconds = 3600;
     c.forges = vec![forge("github", "https://api.github.com?token=not-allowed")];
     assert!(c.validate().is_err());
-    c.forges[0].base_url = "https://api.github.com".into();
+    c.forges[0].base_url = Some("https://api.github.com".into());
     c.upstream.page_size = 0;
     assert!(c.validate().is_err());
 }

@@ -13,12 +13,12 @@ allow access.
 All adapters are read-only by interface and transport design in both Test and Live
 modes. Do not grant write permissions just because the dashboard can create Jira tickets.
 
-| Kind | Base URL | Discovery and practical credential guidance |
+| Kind | Default base URL | Discovery and practical credential guidance |
 | --- | --- | --- |
 | `github` | `https://api.github.com` (API base, not github.com) | REST and read-only GraphQL; authored PRs, direct review requests, mentions via search. Fine-grained tokens need access to relevant repos and read access to PRs/issues/metadata; organization approval/SSO may be required. Classic private-repo tokens can require broad `repo` scope, which also grants upstream write rights: prefer fine-grained read-only tokens where possible. |
-| `gitlab` | `https://gitlab.com` or instance root | REST; authored, assigned and reviewer MRs plus accessible account to-dos. Personal token `read_api` is the usual read-only starting point; scopes and project membership vary by server. |
+| `gitlab` | `https://gitlab.com` | REST; authored, assigned and reviewer MRs plus accessible account to-dos. Personal token `read_api` is the usual read-only starting point; scopes and project membership vary by server. |
 | `codeberg` | `https://codeberg.org` | Forgejo API; global account-created, assigned, mentioned and review-requested PR search. Choose read-only repository/issue/user scopes supported by that deployment. |
-| `forgejo` | Your instance root | Same adapter as Codeberg, version-dependent API support. No `/user/repos`-only discovery limitation; public contributions outside joined repositories can be found by global account searches. |
+| `forgejo` | None; specify your instance root | Same adapter as Codeberg, version-dependent API support. No `/user/repos`-only discovery limitation; public contributions outside joined repositories can be found by global account searches. |
 
 All four kinds use the shared bounded Reqwest transport, with separate credentials
 and conditional-response caches per configured instance. Client construction makes

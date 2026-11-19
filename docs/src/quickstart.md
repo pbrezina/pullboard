@@ -105,9 +105,11 @@ jira:
 forges:
   - id: github
     kind: github
-    base_url: https://api.github.com
     token: {value: REPLACE_WITH_READ_ONLY_GITHUB_TOKEN}
 ```
+
+This GitHub entry uses `https://api.github.com` by default. Set `base_url`
+explicitly for a GitHub Enterprise API or another self-hosted forge.
 
 Both lists require 1–100 unique entries; a one-entry list is fine. The first board
 and pattern determine current sprints without fallback. All boards supply board

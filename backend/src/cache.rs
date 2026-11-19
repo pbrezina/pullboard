@@ -308,7 +308,7 @@ impl Cache {
         let (base, policy) = if i.kind == Kind::Jira && i.source_id == "jira" {
             let j = self.config.jira.as_ref().ok_or_else(Error::internal)?;
             (
-                &j.base_url,
+                j.base_url.as_str(),
                 // Effective policy lives inside the committed complete generation.
                 // New configuration cannot partially replace it before refresh succeeds.
                 format!(
@@ -324,7 +324,7 @@ impl Cache {
                 .find(|f| f.id == i.source_id && f.kind == i.kind)
                 .ok_or_else(Error::internal)?;
             (
-                &f.base_url,
+                f.effective_base_url().map_err(|_| Error::internal())?,
                 format!("{:?}:{:?}", f.include_repositories, f.exclude_repositories),
             )
         };
@@ -764,6 +764,27 @@ fn source(id: &str, name: &str, kind: Kind) -> SourceHealth {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn omitted_and_explicit_hosted_forge_urls_have_the_same_scope() {
+        let config =
+            Config::from_yaml("forges: [{id: work, kind: github, token: {value: synthetic}}]")
+                .unwrap();
+        let mut cache = Cache::open(Path::new(":memory:"), &config).await.unwrap();
+        let identity = Identity {
+            source_id: "work".into(),
+            kind: Kind::Github,
+            account_id: "1".into(),
+            display_name: "Me".into(),
+            username: "me".into(),
+            profile_url: None,
+        };
+        let default_scope = cache.scope(&identity).unwrap();
+        cache.config.forges[0].base_url = Some("https://api.github.com/".into());
+        assert_eq!(cache.scope(&identity).unwrap(), default_scope);
+        cache.config.forges[0].base_url = Some("https://enterprise.example/api/v3".into());
+        assert_ne!(cache.scope(&identity).unwrap(), default_scope);
+    }
+
     #[tokio::test]
     async fn board_order_is_scope_but_pattern_policy_changes_wait_for_publication() {
         let config = Config::from_yaml("jira:\n  base_url: https://jira.example\n  email: human@example.invalid\n  token: {value: synthetic}\n  projects: [DEV]\n  board_ids: [14585, 11235]\n  team: Team\n  sprint_name_patterns: [IDENTITY, CORE]\n").unwrap();

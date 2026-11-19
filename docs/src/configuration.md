@@ -37,6 +37,8 @@ ai:
 | `server.database` | Disposable SQLite file, parent must be writable |
 | `read_only_test_mode` | Startup value, default `true`; initializes shared runtime Test mode with zero Jira writes |
 | `refresh_interval_seconds` | `3600`, allowed 1–604800 |
+| `attention_default_days` | Optional; `14`, allowed 1–36500. Initial/reset Needs Attention display window. |
+| `attention_retention_days` | Optional; `180`, allowed 1–36500. Applied when each source successfully refreshes. |
 | `upstream.timeout_seconds` | `30`, allowed 1–120 |
 | `upstream.max_pages` | `100`, allowed 1–1000; exceeding a bound fails that source refresh, retaining old data |
 | `upstream.page_size` | `100`, allowed 1–100 |
@@ -92,6 +94,11 @@ explicit review, not an automatic retry. See [action mode](tickets-ai.md#runtime
 
 Forge `id` uses ASCII letters/digits/hyphen/underscore and cannot be `jira`.
 Optional forge `name` defaults to `id`; it is a source label, not an account identity.
+Forge `base_url` may be omitted for `github` (`https://api.github.com`), `gitlab`
+(`https://gitlab.com`), and `codeberg` (`https://codeberg.org`). `forgejo` requires
+an explicit instance root. Explicit URLs override the defaults; use the API base
+for GitHub Enterprise and the instance root for GitLab or Forgejo. Blank, null or
+invalid URLs are errors, not requests to try the public service.
 Do not casually rename IDs: cached PR/issue identities and links are source-qualified.
 `include_repositories` and `exclude_repositories` are glob lists applied **after**
 account discovery (`owner/repository`); empty include means all discovered, excludes

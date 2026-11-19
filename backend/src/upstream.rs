@@ -61,7 +61,8 @@ pub fn check_policy(config: &ForgeConfig, route: &IssueRoute) -> Result<()> {
     Ok(())
 }
 pub fn web_base(config: &ForgeConfig) -> Result<url::Url> {
-    let mut base = url::Url::parse(&config.base_url).map_err(|_| invalid_url())?;
+    let url = config.effective_base_url().map_err(|_| invalid_url())?;
+    let mut base = url::Url::parse(url).map_err(|_| invalid_url())?;
     if config.kind == Kind::Github {
         if base.as_str().trim_end_matches('/') == "https://api.github.com" {
             return url::Url::parse("https://github.com/").map_err(|_| invalid_url());

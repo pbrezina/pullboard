@@ -312,7 +312,11 @@ At any forge prompt, **Esc** discards the current draft and returns to forge
 management. Cancelling an edit preserves the existing forge unchanged; cancelling
 a new account does not add it. **Ctrl-C** still exits the whole setup.
 GitHub uses its API base (`https://api.github.com`); GitLab, Codeberg and Forgejo
-use instance roots. Repository include/exclude globs and a forge's default Jira
+use instance roots. The wizard shows the public default for GitHub, GitLab and
+Codeberg and can omit it from YAML when accepted. Forgejo needs a URL. When
+editing an existing instance, its saved URL remains selected; changing the
+destination requires confirmation before reusing a saved token.
+Repository include/exclude globs and a forge's default Jira
 project are YAML-only settings, preserved when editing an existing configuration
 (apart from confirmed cleanup of links to removed Jira projects). New instances
 use no repository filters and the primary Jira project. Repository globs narrow

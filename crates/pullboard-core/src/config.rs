@@ -224,7 +224,12 @@ pub struct ForgeConfig {
     #[serde(default)]
     pub name: Option<String>,
     pub kind: Kind,
-    pub base_url: String,
+    #[serde(
+        default,
+        deserialize_with = "explicit_forge_url",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub base_url: Option<String>,
     pub token: Secret,
     #[serde(default)]
     pub include_repositories: Vec<String>,
@@ -233,7 +238,35 @@ pub struct ForgeConfig {
     #[serde(default)]
     pub default_project: Option<String>,
 }
+
+fn explicit_forge_url<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
+}
+
 impl ForgeConfig {
+    pub fn default_base_url(kind: Kind) -> Option<&'static str> {
+        match kind {
+            Kind::Github => Some("https://api.github.com"),
+            Kind::Gitlab => Some("https://gitlab.com"),
+            Kind::Codeberg => Some("https://codeberg.org"),
+            Kind::Forgejo | Kind::Jira => None,
+        }
+    }
+
+    /// The validated, trusted endpoint used by transport, URL routing and cache scope.
+    pub fn effective_base_url(&self) -> anyhow::Result<&str> {
+        anyhow::ensure!(self.kind != Kind::Jira, "Jira is not a forge");
+        let url = self
+            .base_url
+            .as_deref()
+            .or_else(|| Self::default_base_url(self.kind))
+            .ok_or_else(|| anyhow::anyhow!("forgejo requires an explicit base_url"))?;
+        anyhow::ensure!(base_url(url), "invalid forge base_url");
+        Ok(url)
+    }
+
     pub fn name(&self) -> &str {
         self.name.as_deref().unwrap_or(&self.id)
     }
@@ -540,9 +573,10 @@ impl Config {
                 identifier(&f.id) && ids.insert(f.id.clone()) && f.kind != Kind::Jira,
                 "forge IDs must be unique, stable and not jira"
             );
+            f.effective_base_url()?;
             anyhow::ensure!(
-                base_url(&f.base_url) && !f.name().trim().is_empty() && f.token.validate(),
-                "invalid forge URL, account or credential"
+                !f.name().trim().is_empty() && f.token.validate(),
+                "invalid forge account or credential"
             );
             for p in f.include_repositories.iter().chain(&f.exclude_repositories) {
                 anyhow::ensure!(globset::Glob::new(p).is_ok(), "invalid repository glob");

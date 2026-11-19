@@ -251,3 +251,44 @@ fn optional_attention_window_default_and_bounds() {
     );
     assert!(Config::from_yaml("attention_retention_days: 0").is_err());
 }
+
+#[test]
+fn hosted_forge_defaults_require_omission_and_preserve_explicit_endpoints() {
+    for (kind, expected) in [
+        ("github", "https://api.github.com"),
+        ("gitlab", "https://gitlab.com"),
+        ("codeberg", "https://codeberg.org"),
+    ] {
+        let yaml = format!("forges: [{{id: stable, kind: {kind}, token: {{value: synthetic}}}}]");
+        let c = Config::from_yaml(&yaml).unwrap();
+        assert_eq!(c.forges[0].effective_base_url().unwrap(), expected);
+        assert!(c.forges[0].base_url.is_none());
+        let written: serde_yaml::Value = serde_yaml::from_str(&c.to_yaml().unwrap()).unwrap();
+        assert!(written["forges"][0].get("base_url").is_none());
+    }
+
+    let prefix = "forges:\n  - id: stable\n    token: {value: synthetic}\n";
+    for (kind, url) in [
+        ("github", "https://enterprise.example/api/v3"),
+        ("gitlab", "https://gitlab.example/custom"),
+        ("forgejo", "https://forgejo.example"),
+    ] {
+        let c =
+            Config::from_yaml(&format!("{prefix}    kind: {kind}\n    base_url: {url}\n")).unwrap();
+        assert_eq!(c.forges[0].effective_base_url().unwrap(), url);
+        assert!(c.to_yaml().unwrap().contains(url));
+    }
+    assert!(Config::from_yaml(&format!("{prefix}    kind: forgejo\n")).is_err());
+    for invalid in [
+        "null",
+        "''",
+        "https://user:password@forge.example",
+        "https://forge.example/?bad=1",
+    ] {
+        let error = Config::from_yaml(&format!(
+            "{prefix}    kind: github\n    base_url: {invalid}\n"
+        ))
+        .unwrap_err();
+        assert!(!error.to_string().contains("password"));
+    }
+}

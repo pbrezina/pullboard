@@ -3,10 +3,10 @@
 `api/openapi.json` is the normative OpenAPI 3.1 wire contract; `api/CONTRACT.md`
 explains its invariants. Both live in the repository and must be read before
 API-facing changes. This guide does not define an alternative payload format.
-The current contract is **v1.7.0**: ordered YAML `board_ids` and `sprint_name_patterns`
-replace the singular settings. First board/pattern identify current sprints; all
-boards supply display sprints and any committed pattern allows creation choices.
-Wire shapes are unchanged. Ticket-favoring concurrent refresh still permits overlapping
+The current contract is **v1.8.0**: `/api/context` exposes `attention_default_days`
+and attention threads include `latest_unanswered_at` (null for legacy cached
+threads). Successful source refreshes prune expired threads before publication.
+Ordered sprint boards and patterns are unchanged. Ticket-favoring concurrent refresh still permits overlapping
 ticket, metadata/group and eligibility progress without new fields/phases.
 Independent source publications, `SyncStatus.board_revision`, separate nullable
 `SyncStatus.jira_options` health/readiness/progress, complete atomic choice generations,
@@ -16,7 +16,7 @@ contract files for exact schemas, required/null fields and ordering rules.
 | Method | Endpoint | Result |
 | --- | --- | --- |
 | GET | `/api/health` | Process health/version and atomic runtime mode/revision pair; not upstream health |
-| GET | `/api/context` | Verified identities, nullable first configured current project, active first-board/first-pattern sprint matches, discovered projects, AI summary and atomic mode/revision pair |
+| GET | `/api/context` | Verified identities, nullable first configured current project, active first-board/first-pattern sprint matches, discovered projects, attention display default, AI summary and atomic mode/revision pair |
 | GET | `/api/runtime-mode` | `{read_only_test_mode, mode_revision}` shared by all clients |
 | POST | `/api/runtime-mode` | `{read_only_test_mode, expected_mode_revision}` → resulting mode/revision pair |
 | GET | `/api/board` | Single coherent snapshot, revision and source health |

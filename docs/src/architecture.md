@@ -65,7 +65,7 @@ AI or add attention. Manual content stays outside Board/SQLite in a process-loca
 policy. Refresh preserves those selections; eviction/restart/scope invalidation
 requires explicit recovery, not automatic create replay. Jira cloning does not
 introduce duplicate searches, clone state or broad Jira/forge scans. See
-[upstream issue flow](upstream-issues.md) and [v1.7 API](api.md).
+[upstream issue flow](upstream-issues.md) and [REST API](api.md).
 
 Keep upstream IDs and timestamps real. Never infer handled attention from a commit,
 manufacture missing event times, synthesize Jira IDs, or conceal coverage gaps. A

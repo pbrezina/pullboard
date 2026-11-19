@@ -140,7 +140,7 @@ fn trusted_issue(config: &ForgeConfig) -> UpstreamIssue {
         owner: "acme".into(),
         repository: "widget".into(),
         title: "Last good issue".into(),
-        url: issue_url(kind, &config.base_url, 7),
+        url: issue_url(kind, config.effective_base_url().unwrap(), 7),
         description: "Old content".into(),
         state: "open".into(),
         reporter: None,
@@ -1260,4 +1260,23 @@ async fn sync_issue_read_failures_keep_both_last_good_collections_with_shared_he
             .iter()
             .all(|s| s.last_success_at.is_some() && s.status == "error")
     );
+}
+#[test]
+fn omitted_hosted_base_urls_derive_the_expected_browser_origins() {
+    for (kind, base) in [
+        ("github", "https://github.com/"),
+        ("gitlab", "https://gitlab.com/"),
+        ("codeberg", "https://codeberg.org/"),
+    ] {
+        let config = pullboard::config::Config::from_yaml(&format!(
+            "forges: [{{id: hosted, kind: {kind}, token: {{value: synthetic}}}}]"
+        ))
+        .unwrap();
+        assert_eq!(
+            pullboard::upstream::web_base(&config.forges[0])
+                .unwrap()
+                .as_str(),
+            base
+        );
+    }
 }

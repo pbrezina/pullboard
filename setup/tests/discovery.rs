@@ -491,7 +491,7 @@ async fn forge_identity_uses_shared_read_only_adapter_auth_and_versioned_base() 
         id: "gitlab-1".into(),
         name: None,
         kind: Kind::Gitlab,
-        base_url: server.uri(),
+        base_url: Some(server.uri()),
         token: Secret::Literal {
             value: "synthetic-test-token".into(),
         },

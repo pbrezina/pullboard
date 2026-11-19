@@ -1686,7 +1686,10 @@ async fn new_forge_is_provider_name_url_token_verify_then_add_another_no_default
     assert_eq!(f.kind, Kind::Gitlab);
     assert_eq!(f.id, "gitlab-1");
     assert_eq!(f.name.as_deref(), Some("gitlab"));
-    assert_eq!(f.base_url, "https://gitlab.com");
+    assert_eq!(f.effective_base_url().unwrap(), "https://gitlab.com");
+    assert!(f.base_url.is_none());
+    let written: serde_yaml::Value = serde_yaml::from_str(&a.config.to_yaml().unwrap()).unwrap();
+    assert!(written["forges"][0].get("base_url").is_none());
     assert!(f.include_repositories.is_empty());
     assert!(f.exclude_repositories.is_empty());
     assert!(f.default_project.is_none());
@@ -2173,6 +2176,7 @@ async fn saved_forge_destination_change_never_calls_discovery_before_consent() {
     a.config = fixture();
     a.config.jira = None;
     a.config.forges[0].default_project = None;
+    a.config.forges[0].base_url = None;
     let d = MockDiscovery::default();
     let mut p = Script::new(vec![
         Confirm("Configure Jira", false),
@@ -2190,7 +2194,10 @@ async fn saved_forge_destination_change_never_calls_discovery_before_consent() {
             .is::<Cancelled>()
     );
     assert!(d.forges.borrow().is_empty());
-    assert_eq!(a.config.forges[0].base_url, "https://api.github.com");
+    assert_eq!(
+        a.config.forges[0].effective_base_url().unwrap(),
+        "https://api.github.com"
+    );
 }
 
 #[tokio::test]

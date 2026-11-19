@@ -148,14 +148,19 @@ impl Forge for Forgejo {
         &self.config.id
     }
     async fn identity(&self) -> Result<Identity> {
+        let base = self
+            .config
+            .effective_base_url()
+            .map_err(|_| Error::internal())?;
         let me: User = self.http.get("user", &[]).await?;
+        let person = me.person(base);
         Ok(Identity {
             source_id: self.config.id.clone(),
             kind: self.config.kind,
             account_id: me.id.to_string(),
-            display_name: me.person(&self.config.base_url).display_name,
+            display_name: person.display_name,
             username: me.login.clone(),
-            profile_url: me.person(&self.config.base_url).url,
+            profile_url: person.url,
         })
     }
     async fn discover_with_progress(&self, progress: Progress) -> Result<SourceData> {
@@ -240,6 +245,10 @@ impl Forgejo {
         number: u64,
         me: &str,
     ) -> Result<PullRequest> {
+        let base = self
+            .config
+            .effective_base_url()
+            .map_err(|_| Error::internal())?;
         // Fetch details; listing responses on older installations omit requested reviewers.
         let p: Pull = self
             .http
@@ -373,19 +382,13 @@ impl Forgejo {
                 "ready"
             }
             .into(),
-            author: p.user.person(&self.config.base_url),
-            assignees: people(
-                p.assignees
-                    .iter()
-                    .map(|u| u.person(&self.config.base_url))
-                    .collect(),
-                me,
-            ),
+            author: p.user.person(base),
+            assignees: people(p.assignees.iter().map(|u| u.person(base)).collect(), me),
             reviewers: people(
                 p.requested_reviewers
                     .iter()
                     .chain(reviews.iter().filter_map(|r| r.user.as_ref()))
-                    .map(|u| u.person(&self.config.base_url))
+                    .map(|u| u.person(base))
                     .collect(),
                 me,
             ),

@@ -89,7 +89,7 @@ forges:
   - id: personal-github
     # name is optional; omitted display label defaults to the stable id.
     kind: github
-    base_url: https://api.github.com  # GitHub API base, NOT https://github.com
+    # Omitted: https://api.github.com (GitHub Enterprise: specify the API base).
     token: {keyring: {service: pullboard, account: personal-github}}
     include_repositories: []         # empty = all discovered; e.g. ['example-org/*']
     exclude_repositories: ['example-org/archived-*']
@@ -105,13 +105,13 @@ forges:
   - id: community-gitlab
     name: Community GitLab
     kind: gitlab
-    base_url: https://gitlab.com
+    # Omitted: https://gitlab.com
     token: {value: REPLACE-WITH-READ-API-TOKEN}
     default_project: DEV
   - id: personal-codeberg
     name: Codeberg
     kind: codeberg
-    base_url: https://codeberg.org
+    # Omitted: https://codeberg.org
     token: {keyring: {service: pullboard, account: personal-codeberg}}
     default_project: DEV
   - id: selfhosted-forgejo

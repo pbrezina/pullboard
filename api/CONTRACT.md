@@ -612,9 +612,10 @@ explicit source selection (`422 ambiguous_upstream_source`), never guessing an
 account or trying several credentials. A non-null source must match that same URL.
 No Jira readiness or mode revision is needed for this read-only operation.
 
-Derive the trusted **web base** from configuration, not from submitted URLs or
-redirects: GitLab/Codeberg/Forgejo use their configured base unchanged. GitHub's
-configured `https://api.github.com/` maps only to `https://github.com/`; a GitHub
+Derive the trusted **web base** from the effective YAML endpoint (explicit URL or
+the fixed hosted default), not from submitted URLs or redirects.
+GitLab/Codeberg/Forgejo use their effective base unchanged. GitHub's
+`https://api.github.com/` maps only to `https://github.com/`; a GitHub
 Enterprise API base ending in `/api/v3` maps to the same origin with that suffix
 removed. Other GitHub bases retain their configured origin/path. These are fixed
 adapter mappings, not arbitrary host substitution, discovered redirect targets or
